@@ -1,0 +1,112 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Desktop Reminder</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="inAppReminder" class="inapp-reminder hidden"></div>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>桌面提醒</h1>
+        <p>轻量事件管理，支持 DDL 与多视图</p>
+      </div>
+      <div class="window-actions">
+        <label class="switch"><input id="alwaysOnTop" type="checkbox" /><span>窗口置顶</span></label>
+        <label class="switch"><input id="autoStart" type="checkbox" /><span>开机自启</span></label>
+        <button id="hideBtn" class="ghost">缩小到托盘</button>
+      </div>
+    </header>
+
+    <section class="creator panel">
+      <h2 id="formTitle">新增事件</h2>
+      <form id="eventForm">
+        <input type="hidden" id="eventId" />
+        <div class="grid">
+          <label>
+            标题
+            <input id="title" required maxlength="80" placeholder="例如：提交周报" />
+          </label>
+          <label>
+            粒度
+            <select id="priority">
+              <option value="urgent">紧急</option>
+              <option value="important">重要</option>
+              <option value="daily">日常</option>
+            </select>
+          </label>
+          <label>
+            DDL
+            <input id="dueAt" type="datetime-local" />
+          </label>
+        </div>
+        <label>
+          备注
+          <textarea id="note" rows="2" maxlength="220" placeholder="补充信息（可选）"></textarea>
+        </label>
+        <div class="form-actions">
+          <button type="submit" id="saveBtn">保存事件</button>
+          <button type="button" id="cancelEdit" class="ghost hidden">取消编辑</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="today panel">
+      <div class="today-head">
+        <h2>今日面板</h2>
+        <div class="switch-group">
+          <label class="switch"><input id="reminderEnabled" type="checkbox" /><span>启用提醒</span></label>
+          <label class="switch"><input id="reminderDay" type="checkbox" /><span>提前1天</span></label>
+          <label class="switch"><input id="reminderHour" type="checkbox" /><span>提前1小时</span></label>
+          <label class="switch"><input id="reminderTenMin" type="checkbox" /><span>提前10分钟</span></label>
+          <label class="switch"><input id="reminderOverdue" type="checkbox" /><span>逾期提醒</span></label>
+        </div>
+      </div>
+      <div id="todayPanel" class="today-panel"></div>
+    </section>
+
+    <section class="views panel">
+      <div class="view-header">
+        <h2>事件视图</h2>
+        <div class="tabs" id="viewTabs">
+          <button data-view="list" class="active">列表</button>
+          <button data-view="calendar">日历</button>
+          <button data-view="table">表格</button>
+          <button data-view="timeline">时间轴</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <input id="searchKeyword" placeholder="搜索标题/备注" />
+        <select id="filterPriority">
+          <option value="all">全部粒度</option>
+          <option value="urgent">紧急</option>
+          <option value="important">重要</option>
+          <option value="daily">日常</option>
+        </select>
+        <select id="filterStatus">
+          <option value="all">全部状态</option>
+          <option value="active">进行中</option>
+          <option value="completed">已完成</option>
+          <option value="overdue">已逾期</option>
+        </select>
+        <button id="selectVisibleBtn" class="ghost">全选当前</button>
+        <button id="clearSelectionBtn" class="ghost">清空选择</button>
+        <button id="batchCompleteBtn" class="ghost">批量完成</button>
+        <button id="batchDeleteBtn" class="danger">批量删除</button>
+      </div>
+      <div id="resultStat" class="result-stat"></div>
+      <div id="viewContent" class="view-content"></div>
+    </section>
+  </div>
+
+  <template id="emptyTemplate">
+    <div class="empty">暂无事件，先添加一个吧。</div>
+  </template>
+
+  <script src="./renderer.js"></script>
+</body>
+</html>

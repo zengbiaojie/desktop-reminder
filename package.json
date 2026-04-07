@@ -1,0 +1,21 @@
+{
+  "name": "desktop-reminder",
+  "version": "1.0.0",
+  "description": "Lightweight desktop reminder app",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon:generate": "png-to-ico -- ddl.png > assets/tray.ico"
+  },
+  "keywords": [
+    "reminder",
+    "desktop",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^37.1.0",
+    "png-to-ico": "^3.0.1"
+  }
+}
