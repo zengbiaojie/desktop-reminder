@@ -33,11 +33,20 @@ const defaultState = {
 };
 
 const allowedPriorities = new Set(["urgent", "important", "daily"]);
+const allowedRecurrenceFreq = new Set(["daily", "weekly", "monthly"]);
 const iconCandidates = [
   path.join(__dirname, "..", "assets", "tray.ico"),
   path.join(__dirname, "..", "assets", "tray.png"),
   path.join(__dirname, "..", "ddl.png")
 ];
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function makeId(prefix) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
 
 function ensureDataFile() {
   if (!fs.existsSync(dataDir)) {
@@ -65,10 +74,133 @@ function normalizeSettings(input) {
   };
 }
 
-function normalizeEventShape(item) {
+function normalizeTitle(value) {
+  const title = String(value || "").trim();
+  if (!title) {
+    throw new Error("Title is required");
+  }
+  if (title.length > 80) {
+    throw new Error("Title must be <= 80 chars");
+  }
+  return title;
+}
+
+function normalizePriority(value) {
+  const priority = String(value || "daily").trim();
+  if (!allowedPriorities.has(priority)) {
+    throw new Error("Invalid priority");
+  }
+  return priority;
+}
+
+function normalizeDueAt(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    throw new Error("Invalid DDL datetime");
+  }
+  return d.toISOString();
+}
+
+function normalizeTags(value) {
+  const source = Array.isArray(value) ? value : String(value || "").split(",");
+  const uniq = new Set();
+  for (const raw of source) {
+    const tag = String(raw || "").trim();
+    if (!tag) continue;
+    uniq.add(tag.slice(0, 24));
+  }
+  return [...uniq].slice(0, 12);
+}
+
+function normalizeSubtasks(value) {
+  const source = Array.isArray(value) ? value : [];
+  const out = [];
+  for (const raw of source) {
+    const text = typeof raw === "string" ? raw : raw?.text;
+    const t = String(text || "").trim();
+    if (!t) continue;
+    out.push({
+      id: typeof raw === "object" && raw?.id ? String(raw.id) : makeId("sub"),
+      text: t.slice(0, 120),
+      completed: Boolean(typeof raw === "object" ? raw?.completed : false)
+    });
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+function normalizeRecurrence(value, fallback = null) {
+  const src = value && typeof value === "object" ? value : {};
+  const base = fallback && typeof fallback === "object" ? fallback : {};
+  const enabled = Boolean(src.enabled ?? base.enabled ?? false);
+  const freqRaw = String(src.freq ?? base.freq ?? "daily");
+  const freq = allowedRecurrenceFreq.has(freqRaw) ? freqRaw : "daily";
+
+  const intervalNum = Number(src.interval ?? base.interval ?? 1);
+  const interval = Number.isFinite(intervalNum) ? Math.max(1, Math.min(365, Math.round(intervalNum))) : 1;
+
+  const maxRaw = Number(src.maxOccurrences ?? base.maxOccurrences ?? 0);
+  const maxOccurrences = Number.isFinite(maxRaw) ? Math.max(0, Math.min(999, Math.round(maxRaw))) : 0;
+
+  const indexRaw = Number(src.occurrenceIndex ?? base.occurrenceIndex ?? 1);
+  const occurrenceIndex = Number.isFinite(indexRaw) ? Math.max(1, Math.round(indexRaw)) : 1;
+
+  let endDate = src.endDate ?? base.endDate ?? "";
+  if (endDate) {
+    const d = new Date(endDate);
+    endDate = Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  }
+
+  const seriesId = String(src.seriesId ?? base.seriesId ?? "").trim();
+
   return {
-    ...item,
-    notifiedKeys: Array.isArray(item?.notifiedKeys) ? item.notifiedKeys : []
+    enabled,
+    freq,
+    interval,
+    endDate,
+    maxOccurrences,
+    occurrenceIndex,
+    seriesId
+  };
+}
+
+function normalizeEventShape(item) {
+  const safeDue = (() => {
+    try {
+      return normalizeDueAt(item?.dueAt || "");
+    } catch {
+      return "";
+    }
+  })();
+
+  const completed = Boolean(item?.completed);
+  const completedAt = (() => {
+    if (!completed) return "";
+    const d = new Date(item?.completedAt || "");
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  })();
+
+  return {
+    id: String(item?.id || makeId("evt")),
+    title: String(item?.title || "").trim() || "Untitled",
+    note: String(item?.note || "").trim(),
+    priority: allowedPriorities.has(String(item?.priority)) ? String(item.priority) : "daily",
+    dueAt: safeDue,
+    completed,
+    completedAt,
+    tags: normalizeTags(item?.tags),
+    subtasks: normalizeSubtasks(item?.subtasks),
+    recurrence: normalizeRecurrence(item?.recurrence),
+    notifiedKeys: Array.isArray(item?.notifiedKeys) ? item.notifiedKeys.map((x) => String(x)) : [],
+    createdAt: (() => {
+      const d = new Date(item?.createdAt || "");
+      return Number.isNaN(d.getTime()) ? nowIso() : d.toISOString();
+    })(),
+    updatedAt: (() => {
+      const d = new Date(item?.updatedAt || "");
+      return Number.isNaN(d.getTime()) ? nowIso() : d.toISOString();
+    })()
   };
 }
 
@@ -93,30 +225,6 @@ function writeState(state) {
   fs.writeFileSync(dataPath, JSON.stringify(state, null, 2), "utf-8");
 }
 
-function normalizeTitle(value) {
-  const title = String(value || "").trim();
-  if (!title) throw new Error("Title is required");
-  if (title.length > 80) throw new Error("Title must be <= 80 chars");
-  return title;
-}
-
-function normalizePriority(value) {
-  const priority = String(value || "daily");
-  if (!allowedPriorities.has(priority)) {
-    throw new Error("Invalid priority");
-  }
-  return priority;
-}
-
-function normalizeDueAt(value) {
-  if (!value) return "";
-  const due = new Date(value);
-  if (Number.isNaN(due.getTime())) {
-    throw new Error("Invalid DDL datetime format");
-  }
-  return due.toISOString();
-}
-
 function getPreferredNativeIcon() {
   for (const iconPath of iconCandidates) {
     const loaded = nativeImage.createFromPath(iconPath);
@@ -134,9 +242,7 @@ function applyAutoStart(enabled) {
 }
 
 function createBubbleWindow() {
-  if (bubbleWindow && !bubbleWindow.isDestroyed()) {
-    return bubbleWindow;
-  }
+  if (bubbleWindow && !bubbleWindow.isDestroyed()) return bubbleWindow;
 
   const area = screen.getPrimaryDisplay().workArea;
   const width = 72;
@@ -199,14 +305,11 @@ function stopBubbleDrag() {
 }
 
 function startBubbleDrag(startPoint) {
-  if (!bubbleWindow || bubbleWindow.isDestroyed()) {
-    return false;
-  }
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return false;
+
   const startX = Number(startPoint?.x);
   const startY = Number(startPoint?.y);
-  if (!Number.isFinite(startX) || !Number.isFinite(startY)) {
-    return false;
-  }
+  if (!Number.isFinite(startX) || !Number.isFinite(startY)) return false;
 
   const bounds = bubbleWindow.getBounds();
   bubbleDragOffset = {
@@ -247,11 +350,11 @@ function createTray() {
   let icon = getPreferredNativeIcon();
   if (icon.isEmpty()) {
     const iconSvg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-    <rect width="64" height="64" rx="14" fill="#22577A"/>
-    <circle cx="32" cy="32" r="18" fill="#57CC99"/>
-    <path d="M23 33l6 6 13-13" stroke="#0B132B" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>`;
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="14" fill="#22577A"/>
+      <circle cx="32" cy="32" r="18" fill="#57CC99"/>
+      <path d="M23 33l6 6 13-13" stroke="#0B132B" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
     icon = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(iconSvg).toString("base64")}`);
   }
 
@@ -259,10 +362,7 @@ function createTray() {
   tray.setToolTip("Desktop Reminder");
 
   const contextMenu = Menu.buildFromTemplate([
-    {
-      label: "Show Main Window",
-      click: () => showMainWindow()
-    },
+    { label: "Show Main Window", click: () => showMainWindow() },
     {
       label: "Quit",
       click: () => {
@@ -290,9 +390,9 @@ function createWindow() {
 
   mainWindow = new BrowserWindow({
     width: 980,
-    height: 700,
-    minWidth: 780,
-    minHeight: 560,
+    height: 740,
+    minWidth: 820,
+    minHeight: 600,
     title: "Desktop Reminder",
     icon: windowIcon.isEmpty() ? undefined : windowIcon,
     backgroundColor: "#f6f9fc",
@@ -343,7 +443,7 @@ function sendDesktopNotification(title, body) {
       notice.show();
     }
   } catch {
-    // ignore notification runtime errors
+    // ignore
   }
 
   if (tray && process.platform === "win32") {
@@ -354,7 +454,7 @@ function sendDesktopNotification(title, body) {
         content: body
       });
     } catch {
-      // ignore tray balloon errors
+      // ignore
     }
   }
 
@@ -363,7 +463,7 @@ function sendDesktopNotification(title, body) {
       mainWindow.webContents.send("reminder:trigger", {
         title,
         body,
-        at: new Date().toISOString()
+        at: nowIso()
       });
       if (!mainWindow.isVisible()) {
         showMainWindow();
@@ -375,11 +475,89 @@ function sendDesktopNotification(title, body) {
         }
       }, 6000);
     } catch {
-      // ignore window notification errors
+      // ignore
     }
   }
 
   console.log(`[reminder] ${title}: ${body}`);
+}
+
+function addDuration(dateLike, freq, interval) {
+  const d = new Date(dateLike);
+  if (Number.isNaN(d.getTime())) return "";
+  if (freq === "weekly") {
+    d.setDate(d.getDate() + 7 * interval);
+  } else if (freq === "monthly") {
+    d.setMonth(d.getMonth() + interval);
+  } else {
+    d.setDate(d.getDate() + interval);
+  }
+  return d.toISOString();
+}
+
+function maybeGenerateRecurringNext(state, prevEvent, nextEvent) {
+  const justCompleted = !prevEvent.completed && nextEvent.completed;
+  if (!justCompleted) return;
+
+  const rec = normalizeRecurrence(nextEvent.recurrence);
+  if (!rec.enabled) return;
+  if (!nextEvent.dueAt) return;
+
+  const currentIndex = Number(rec.occurrenceIndex || 1);
+  const nextIndex = currentIndex + 1;
+
+  if (rec.maxOccurrences > 0 && nextIndex > rec.maxOccurrences) {
+    return;
+  }
+
+  const nextDueAt = addDuration(nextEvent.dueAt, rec.freq, rec.interval);
+  if (!nextDueAt) return;
+
+  if (rec.endDate) {
+    const endMs = new Date(rec.endDate).getTime();
+    const nextMs = new Date(nextDueAt).getTime();
+    if (Number.isFinite(endMs) && Number.isFinite(nextMs) && nextMs > endMs) {
+      return;
+    }
+  }
+
+  const seriesId = rec.seriesId || nextEvent.id;
+  const exists = state.events.some((x) => x.recurrence?.seriesId === seriesId && x.recurrence?.occurrenceIndex === nextIndex);
+  if (exists) return;
+
+  const next = {
+    id: makeId("evt"),
+    title: nextEvent.title,
+    note: nextEvent.note,
+    priority: nextEvent.priority,
+    dueAt: nextDueAt,
+    completed: false,
+    completedAt: "",
+    tags: [...(nextEvent.tags || [])],
+    subtasks: (nextEvent.subtasks || []).map((x) => ({
+      id: makeId("sub"),
+      text: x.text,
+      completed: false
+    })),
+    recurrence: {
+      ...rec,
+      enabled: true,
+      seriesId,
+      occurrenceIndex: nextIndex
+    },
+    notifiedKeys: [],
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  nextEvent.recurrence = {
+    ...rec,
+    enabled: true,
+    seriesId,
+    occurrenceIndex: currentIndex
+  };
+
+  state.events.push(next);
 }
 
 function runReminderCheck() {
@@ -413,18 +591,16 @@ function runReminderCheck() {
         continue;
       }
 
-      const shouldNotify = now >= triggerMs;
-      if (!shouldNotify || item.notifiedKeys.includes(rule.key)) continue;
-
-      sendDesktopNotification("Reminder", `${item.title}\n${rule.label}, due: ${new Date(item.dueAt).toLocaleString()}`);
-      item.notifiedKeys.push(rule.key);
-      changed = true;
+      if (now >= triggerMs && !item.notifiedKeys.includes(rule.key)) {
+        sendDesktopNotification("Reminder", `${item.title}\n${rule.label}, due: ${new Date(item.dueAt).toLocaleString()}`);
+        item.notifiedKeys.push(rule.key);
+        changed = true;
+      }
     }
 
     if (reminders.rules?.overdue !== false) {
       const overdueKey = "overdue";
-      const shouldNotifyOverdue = now > dueMs;
-      if (shouldNotifyOverdue && !item.notifiedKeys.includes(overdueKey)) {
+      if (now > dueMs && !item.notifiedKeys.includes(overdueKey)) {
         sendDesktopNotification("Task overdue", `${item.title}\nDue: ${new Date(item.dueAt).toLocaleString()}`);
         item.notifiedKeys.push(overdueKey);
         changed = true;
@@ -432,33 +608,40 @@ function runReminderCheck() {
     }
   }
 
-  if (changed) {
-    writeState(state);
-  }
+  if (changed) writeState(state);
 }
 
 function startReminderLoop() {
   if (reminderTimer) clearInterval(reminderTimer);
   runReminderCheck();
-  reminderTimer = setInterval(() => {
-    runReminderCheck();
-  }, 30 * 1000);
+  reminderTimer = setInterval(runReminderCheck, 30 * 1000);
 }
 
 ipcMain.handle("events:list", () => readState().events);
 
 ipcMain.handle("events:add", (_, input) => {
   const state = readState();
+  const now = nowIso();
+  const id = makeId("evt");
+  const recurrence = normalizeRecurrence(input?.recurrence);
   const record = {
-    id: `evt_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-    title: normalizeTitle(input.title),
-    note: String(input.note || "").trim(),
-    priority: normalizePriority(input.priority),
-    dueAt: normalizeDueAt(input.dueAt),
-    notifiedKeys: [],
+    id,
+    title: normalizeTitle(input?.title),
+    note: String(input?.note || "").trim(),
+    priority: normalizePriority(input?.priority),
+    dueAt: normalizeDueAt(input?.dueAt),
     completed: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    completedAt: "",
+    tags: normalizeTags(input?.tags),
+    subtasks: normalizeSubtasks(input?.subtasks),
+    recurrence: {
+      ...recurrence,
+      seriesId: recurrence.enabled ? recurrence.seriesId || id : "",
+      occurrenceIndex: recurrence.enabled ? Math.max(1, recurrence.occurrenceIndex || 1) : 1
+    },
+    notifiedKeys: [],
+    createdAt: now,
+    updatedAt: now
   };
 
   state.events.push(record);
@@ -468,19 +651,34 @@ ipcMain.handle("events:add", (_, input) => {
 
 ipcMain.handle("events:update", (_, input) => {
   const state = readState();
-  const index = state.events.findIndex((x) => x.id === input.id);
+  const index = state.events.findIndex((x) => x.id === input?.id);
   if (index === -1) throw new Error("Event not found");
 
   const old = state.events[index];
-  const nextDueAt = normalizeDueAt(input.dueAt ?? old.dueAt);
+  const nextDueAt = normalizeDueAt(input?.dueAt ?? old.dueAt);
+  const nextCompleted = typeof input?.completed === "boolean" ? input.completed : old.completed;
+  const nextRecurrence = normalizeRecurrence(input?.recurrence, old.recurrence);
+
   const next = {
     ...old,
-    title: normalizeTitle(input.title ?? old.title),
-    note: String(input.note ?? old.note).trim(),
-    priority: normalizePriority(input.priority ?? old.priority),
+    title: normalizeTitle(input?.title ?? old.title),
+    note: String(input?.note ?? old.note).trim(),
+    priority: normalizePriority(input?.priority ?? old.priority),
     dueAt: nextDueAt,
-    completed: typeof input.completed === "boolean" ? input.completed : old.completed,
-    updatedAt: new Date().toISOString()
+    completed: nextCompleted,
+    completedAt: nextCompleted ? (old.completed ? old.completedAt || nowIso() : nowIso()) : "",
+    tags: normalizeTags(input?.tags ?? old.tags),
+    subtasks: normalizeSubtasks(input?.subtasks ?? old.subtasks),
+    recurrence: {
+      ...nextRecurrence,
+      seriesId: nextRecurrence.enabled
+        ? nextRecurrence.seriesId || old.recurrence?.seriesId || old.id
+        : "",
+      occurrenceIndex: nextRecurrence.enabled
+        ? Math.max(1, Number(nextRecurrence.occurrenceIndex || old.recurrence?.occurrenceIndex || 1))
+        : 1
+    },
+    updatedAt: nowIso()
   };
 
   if (old.dueAt !== nextDueAt) {
@@ -491,8 +689,9 @@ ipcMain.handle("events:update", (_, input) => {
   }
 
   state.events[index] = next;
+  maybeGenerateRecurringNext(state, old, state.events[index]);
   writeState(state);
-  return next;
+  return state.events[index];
 });
 
 ipcMain.handle("events:toggle", (_, id) => {
@@ -500,8 +699,16 @@ ipcMain.handle("events:toggle", (_, id) => {
   const index = state.events.findIndex((x) => x.id === id);
   if (index === -1) throw new Error("Event not found");
 
-  state.events[index].completed = !state.events[index].completed;
-  state.events[index].updatedAt = new Date().toISOString();
+  const old = state.events[index];
+  const next = {
+    ...old,
+    completed: !old.completed,
+    completedAt: !old.completed ? nowIso() : "",
+    updatedAt: nowIso()
+  };
+
+  state.events[index] = next;
+  maybeGenerateRecurringNext(state, old, state.events[index]);
   writeState(state);
   return state.events[index];
 });
@@ -511,6 +718,11 @@ ipcMain.handle("events:delete", (_, id) => {
   state.events = state.events.filter((x) => x.id !== id);
   writeState(state);
   return true;
+});
+
+ipcMain.handle("events:get-urgent-count", () => {
+  const state = readState();
+  return state.events.filter((x) => x.priority === "urgent" && !x.completed).length;
 });
 
 ipcMain.handle("settings:get", () => readState().settings);
@@ -523,26 +735,26 @@ ipcMain.handle("settings:update", (_, patch) => {
     ...prev,
     reminders: {
       ...(prev.reminders || {}),
-      ...(patch.reminders || {}),
+      ...(patch?.reminders || {}),
       rules: {
         ...(prev.reminders?.rules || {}),
-        ...(patch.reminders?.rules || {})
+        ...(patch?.reminders?.rules || {})
       }
     }
   }).reminders;
 
   state.settings = {
     ...prev,
-    ...patch,
+    ...(patch || {}),
     reminders: nextReminders
   };
 
   writeState(state);
 
-  if (Object.prototype.hasOwnProperty.call(patch, "autoStart")) {
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "autoStart")) {
     applyAutoStart(state.settings.autoStart);
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "alwaysOnTop") && mainWindow) {
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "alwaysOnTop") && mainWindow) {
     mainWindow.setAlwaysOnTop(Boolean(state.settings.alwaysOnTop), "screen-saver");
   }
 
@@ -551,9 +763,7 @@ ipcMain.handle("settings:update", (_, patch) => {
 
 ipcMain.handle("window:hide-to-tray", () => {
   hideBubbleWindow();
-  if (mainWindow) {
-    mainWindow.hide();
-  }
+  if (mainWindow) mainWindow.hide();
   return true;
 });
 
@@ -567,32 +777,19 @@ ipcMain.handle("window:hide-bubble", () => {
   return true;
 });
 
-ipcMain.handle("window:start-bubble-drag", (_, point) => {
-  return startBubbleDrag(point);
-});
-
+ipcMain.handle("window:start-bubble-drag", (_, point) => startBubbleDrag(point));
 ipcMain.handle("window:end-bubble-drag", () => {
   stopBubbleDrag();
   return true;
 });
 
 ipcMain.handle("window:show-bubble-menu", () => {
-  if (!bubbleWindow || bubbleWindow.isDestroyed()) {
-    return false;
-  }
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return false;
 
   const menu = Menu.buildFromTemplate([
-    {
-      label: "Show Main Window",
-      click: () => showMainWindow()
-    },
-    {
-      label: "Hide Bubble",
-      click: () => hideBubbleWindow()
-    },
-    {
-      type: "separator"
-    },
+    { label: "Show Main Window", click: () => showMainWindow() },
+    { label: "Hide Bubble", click: () => hideBubbleWindow() },
+    { type: "separator" },
     {
       label: "Quit",
       click: () => {
@@ -604,11 +801,6 @@ ipcMain.handle("window:show-bubble-menu", () => {
 
   menu.popup({ window: bubbleWindow });
   return true;
-});
-
-ipcMain.handle("events:get-urgent-count", () => {
-  const state = readState();
-  return state.events.filter((x) => x.priority === "urgent" && !x.completed).length;
 });
 
 app.whenReady().then(() => {
@@ -637,5 +829,5 @@ app.on("before-quit", () => {
 });
 
 app.on("window-all-closed", () => {
-  // Keep process alive in tray unless user quits.
+  // keep process alive in tray unless user quits
 });

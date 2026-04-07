@@ -2,10 +2,12 @@
   events: [],
   selectedIds: new Set(),
   currentView: "list",
+  formSubtasks: [],
   filters: {
     keyword: "",
     priority: "all",
-    status: "all"
+    status: "all",
+    tag: ""
   },
   settings: {
     autoStart: true,
@@ -31,8 +33,19 @@ const els = {
   note: document.getElementById("note"),
   priority: document.getElementById("priority"),
   dueAt: document.getElementById("dueAt"),
+  tags: document.getElementById("tags"),
+  recurrenceEnabled: document.getElementById("recurrenceEnabled"),
+  recurrenceFreq: document.getElementById("recurrenceFreq"),
+  recurrenceInterval: document.getElementById("recurrenceInterval"),
+  recurrenceEndDate: document.getElementById("recurrenceEndDate"),
+  recurrenceMaxOccurrences: document.getElementById("recurrenceMaxOccurrences"),
+  subtaskInput: document.getElementById("subtaskInput"),
+  addSubtaskBtn: document.getElementById("addSubtaskBtn"),
+  subtaskList: document.getElementById("subtaskList"),
   saveBtn: document.getElementById("saveBtn"),
   cancelEdit: document.getElementById("cancelEdit"),
+  statsPanel: document.getElementById("statsPanel"),
+  workspaceTabs: document.getElementById("workspaceTabs"),
   viewTabs: document.getElementById("viewTabs"),
   viewContent: document.getElementById("viewContent"),
   todayPanel: document.getElementById("todayPanel"),
@@ -45,13 +58,13 @@ const els = {
   searchKeyword: document.getElementById("searchKeyword"),
   filterPriority: document.getElementById("filterPriority"),
   filterStatus: document.getElementById("filterStatus"),
+  filterTag: document.getElementById("filterTag"),
   selectVisibleBtn: document.getElementById("selectVisibleBtn"),
   clearSelectionBtn: document.getElementById("clearSelectionBtn"),
   batchCompleteBtn: document.getElementById("batchCompleteBtn"),
   batchDeleteBtn: document.getElementById("batchDeleteBtn"),
   autoStart: document.getElementById("autoStart"),
   alwaysOnTop: document.getElementById("alwaysOnTop"),
-  hideBtn: document.getElementById("hideBtn"),
   emptyTemplate: document.getElementById("emptyTemplate")
 };
 
@@ -89,8 +102,7 @@ function toLocalInputValue(dateLike) {
 function isOverdue(item) {
   if (!item.dueAt || item.completed) return false;
   const due = new Date(item.dueAt).getTime();
-  if (Number.isNaN(due)) return false;
-  return due < Date.now();
+  return Number.isFinite(due) && due < Date.now();
 }
 
 function esc(text) {
@@ -110,27 +122,40 @@ function sortedEvents(events) {
   });
 }
 
+function parseTags(input) {
+  return String(input || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
 function filteredEvents() {
   const keyword = state.filters.keyword.toLowerCase().trim();
-  return sortedEvents(state.events).filter((item) => {
-    if (state.filters.priority !== "all" && item.priority !== state.filters.priority) {
-      return false;
-    }
+  const tag = state.filters.tag.trim();
 
-    if (state.filters.status === "active" && item.completed) {
-      return false;
-    }
-    if (state.filters.status === "completed" && !item.completed) {
-      return false;
-    }
-    if (state.filters.status === "overdue" && !isOverdue(item)) {
-      return false;
+  return sortedEvents(state.events).filter((item) => {
+    if (state.filters.priority !== "all" && item.priority !== state.filters.priority) return false;
+    if (state.filters.status === "active" && item.completed) return false;
+    if (state.filters.status === "completed" && !item.completed) return false;
+    if (state.filters.status === "overdue" && !isOverdue(item)) return false;
+
+    if (tag) {
+      const tags = Array.isArray(item.tags) ? item.tags : [];
+      if (!tags.includes(tag)) return false;
     }
 
     if (!keyword) return true;
-    const text = `${item.title || ""} ${item.note || ""}`.toLowerCase();
+    const text = `${item.title || ""} ${item.note || ""} ${(item.tags || []).join(" ")}`.toLowerCase();
     return text.includes(keyword);
   });
+}
+
+function subtaskProgress(item) {
+  const subtasks = Array.isArray(item.subtasks) ? item.subtasks : [];
+  if (!subtasks.length) return "无子任务";
+  const done = subtasks.filter((x) => x.completed).length;
+  return `${done}/${subtasks.length}`;
 }
 
 function updateBatchButtons(visibleEvents) {
@@ -144,26 +169,69 @@ function updateBatchButtons(visibleEvents) {
   els.batchDeleteBtn.disabled = selectedCount === 0;
 }
 
+function renderSubtaskEditor() {
+  if (!state.formSubtasks.length) {
+    els.subtaskList.innerHTML = '<div class="today-item"><small>暂无子任务</small></div>';
+    return;
+  }
+
+  els.subtaskList.innerHTML = state.formSubtasks.map((sub) => `
+    <label class="subtask-row ${sub.completed ? "done" : ""}">
+      <input type="checkbox" data-action="toggle-subtask" data-id="${esc(sub.id)}" ${sub.completed ? "checked" : ""} />
+      <span>${esc(sub.text)}</span>
+      <button type="button" class="danger" data-action="delete-subtask" data-id="${esc(sub.id)}">删除</button>
+    </label>
+  `).join("");
+}
+
 function resetForm() {
   els.id.value = "";
   els.title.value = "";
   els.note.value = "";
   els.priority.value = "daily";
   els.dueAt.value = "";
+  els.tags.value = "";
+  els.recurrenceEnabled.checked = false;
+  els.recurrenceFreq.value = "daily";
+  els.recurrenceInterval.value = "1";
+  els.recurrenceEndDate.value = "";
+  els.recurrenceMaxOccurrences.value = "0";
+  state.formSubtasks = [];
+  renderSubtaskEditor();
   els.formTitle.textContent = "新增事件";
   els.saveBtn.textContent = "保存事件";
   els.cancelEdit.classList.add("hidden");
 }
 
-function startEdit(event) {
-  els.id.value = event.id;
-  els.title.value = event.title;
-  els.note.value = event.note || "";
-  els.priority.value = event.priority;
-  els.dueAt.value = toLocalInputValue(event.dueAt);
+function startEdit(item) {
+  els.id.value = item.id;
+  els.title.value = item.title || "";
+  els.note.value = item.note || "";
+  els.priority.value = item.priority || "daily";
+  els.dueAt.value = toLocalInputValue(item.dueAt);
+  els.tags.value = (item.tags || []).join(", ");
+
+  const rec = item.recurrence || {};
+  els.recurrenceEnabled.checked = Boolean(rec.enabled);
+  els.recurrenceFreq.value = rec.freq || "daily";
+  els.recurrenceInterval.value = String(rec.interval || 1);
+  els.recurrenceEndDate.value = rec.endDate ? normalizeDate(rec.endDate) : "";
+  els.recurrenceMaxOccurrences.value = String(rec.maxOccurrences || 0);
+
+  state.formSubtasks = Array.isArray(item.subtasks)
+    ? item.subtasks.map((x) => ({ id: x.id || `sub_${Math.random()}`, text: x.text || "", completed: Boolean(x.completed) }))
+    : [];
+  renderSubtaskEditor();
+
   els.formTitle.textContent = "编辑事件";
   els.saveBtn.textContent = "更新事件";
   els.cancelEdit.classList.remove("hidden");
+}
+
+function recurrenceLabel(rec) {
+  if (!rec || !rec.enabled) return "非重复";
+  const freqMap = { daily: "每天", weekly: "每周", monthly: "每月" };
+  return `${freqMap[rec.freq] || "每天"} × ${rec.interval || 1}`;
 }
 
 function renderList(events) {
@@ -171,12 +239,15 @@ function renderList(events) {
     <article class="card ${esc(item.priority)} ${item.completed ? "completed" : ""}">
       <label class="select-cell"><input data-action="select" data-id="${esc(item.id)}" class="select-check" type="checkbox" ${state.selectedIds.has(item.id) ? "checked" : ""} /></label>
       <div class="card-main">
-        <h3 data-action="toggle" data-id="${esc(item.id)}">${esc(item.title)}</h3>
+        <h3>${esc(item.title)}</h3>
         <p>${esc(item.note || "无备注")}</p>
         <div class="meta">
           <span class="tag">${priorityLabel[item.priority] || "日常"}</span>
           <span class="tag ${isOverdue(item) ? "due-overdue" : ""}">DDL: ${esc(fmtDateTime(item.dueAt))}</span>
-          <span class="tag">${item.completed ? "已完成" : "进行中"}</span>
+          <span class="tag">状态: ${item.completed ? "已完成" : "进行中"}</span>
+          <span class="tag">子任务: ${esc(subtaskProgress(item))}</span>
+          <span class="tag">重复: ${esc(recurrenceLabel(item.recurrence))}</span>
+          ${(item.tags || []).map((t) => `<span class="tag-soft">#${esc(t)}</span>`).join("")}
         </div>
       </div>
       <div class="row-actions">
@@ -186,7 +257,6 @@ function renderList(events) {
       </div>
     </article>
   `).join("");
-
   return `<div class="list">${html}</div>`;
 }
 
@@ -196,6 +266,9 @@ function renderTable(events) {
       <td><input data-action="select" data-id="${esc(item.id)}" class="select-check" type="checkbox" ${state.selectedIds.has(item.id) ? "checked" : ""} /></td>
       <td>${esc(item.title)}</td>
       <td>${priorityLabel[item.priority] || "日常"}</td>
+      <td>${esc((item.tags || []).join(", ") || "-")}</td>
+      <td>${esc(subtaskProgress(item))}</td>
+      <td>${esc(recurrenceLabel(item.recurrence))}</td>
       <td><span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></td>
       <td>${item.completed ? "已完成" : "进行中"}</td>
       <td>
@@ -213,6 +286,9 @@ function renderTable(events) {
           <th>选中</th>
           <th>标题</th>
           <th>粒度</th>
+          <th>标签</th>
+          <th>子任务</th>
+          <th>重复</th>
           <th>DDL</th>
           <th>状态</th>
           <th>操作</th>
@@ -231,6 +307,9 @@ function renderTimeline(events) {
         <label class="select-cell"><input data-action="select" data-id="${esc(item.id)}" class="select-check" type="checkbox" ${state.selectedIds.has(item.id) ? "checked" : ""} /></label>
       </div>
       <div>${priorityLabel[item.priority] || "日常"} | DDL: <span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></div>
+      <div>标签：${esc((item.tags || []).join(", ") || "无")}</div>
+      <div>子任务进度：${esc(subtaskProgress(item))}</div>
+      <div>重复：${esc(recurrenceLabel(item.recurrence))}</div>
       <div>${esc(item.note || "无备注")}</div>
       <div class="row-actions" style="margin-top:6px;">
         <button data-action="toggle" data-id="${esc(item.id)}" class="ghost">${item.completed ? "设为未完成" : "设为完成"}</button>
@@ -239,6 +318,7 @@ function renderTimeline(events) {
       </div>
     </div>
   `).join("");
+
   return `<div class="timeline">${html}</div>`;
 }
 
@@ -259,7 +339,7 @@ function renderCalendar(events) {
 
   const cells = [];
   for (let i = 0; i < first.getDay(); i += 1) {
-    cells.push(`<div class="day"><div class="day-head"></div></div>`);
+    cells.push('<div class="day"><div class="day-head"></div></div>');
   }
 
   for (let day = 1; day <= last.getDate(); day += 1) {
@@ -274,24 +354,19 @@ function renderCalendar(events) {
 }
 
 function buildTodayList(items, emptyText) {
-  if (!items.length) {
-    return `<div class="today-item"><small>${emptyText}</small></div>`;
-  }
-
+  if (!items.length) return `<div class="today-item"><small>${emptyText}</small></div>`;
   return items.slice(0, 6).map((item) => `
     <div class="today-item">
-      <div>${esc(item.title)}</div>
+      <div>${esc(item.title)} (${esc(subtaskProgress(item))})</div>
       <small>${esc(fmtDateTime(item.dueAt))}</small>
     </div>
   `).join("");
 }
 
 function renderTodayPanel() {
-  const now = new Date();
-  const todayKey = normalizeDate(now.toISOString());
+  const today = normalizeDate(new Date().toISOString());
   const active = state.events.filter((x) => !x.completed && x.dueAt);
-
-  const dueToday = sortedEvents(active.filter((x) => normalizeDate(x.dueAt) === todayKey));
+  const dueToday = sortedEvents(active.filter((x) => normalizeDate(x.dueAt) === today));
   const overdue = sortedEvents(active.filter((x) => isOverdue(x)));
 
   els.todayPanel.innerHTML = `
@@ -306,10 +381,41 @@ function renderTodayPanel() {
   `;
 }
 
+function renderStatsPanel() {
+  const total = state.events.length;
+  const active = state.events.filter((x) => !x.completed).length;
+  const overdue = state.events.filter((x) => isOverdue(x)).length;
+
+  const today = normalizeDate(new Date().toISOString());
+  const completedToday = state.events.filter((x) => x.completed && x.completedAt && normalizeDate(x.completedAt) === today).length;
+
+  const urgentAll = state.events.filter((x) => x.priority === "urgent").length;
+  const urgentDone = state.events.filter((x) => x.priority === "urgent" && x.completed).length;
+  const urgentRate = urgentAll ? Math.round((urgentDone / urgentAll) * 100) : 0;
+
+  const recent7 = [];
+  for (let i = 0; i < 7; i += 1) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = normalizeDate(d.toISOString());
+    const count = state.events.filter((x) => x.completed && x.completedAt && normalizeDate(x.completedAt) === key).length;
+    recent7.push(count);
+  }
+
+  els.statsPanel.innerHTML = `
+    <article class="stat-card"><small>总事件</small><strong>${total}</strong></article>
+    <article class="stat-card"><small>进行中</small><strong>${active}</strong></article>
+    <article class="stat-card"><small>今日完成</small><strong>${completedToday}</strong></article>
+    <article class="stat-card"><small>逾期数量</small><strong>${overdue}</strong></article>
+    <article class="stat-card"><small>紧急完成率</small><strong>${urgentRate}%</strong><div><small>近7天完成: ${recent7.reverse().join("/")}</small></div></article>
+  `;
+}
+
 function render() {
   const events = filteredEvents();
   updateBatchButtons(events);
   renderTodayPanel();
+  renderStatsPanel();
 
   if (!events.length) {
     els.viewContent.innerHTML = '<div class="empty">没有匹配的事件，调整筛选条件试试。</div>';
@@ -329,18 +435,44 @@ function render() {
 
 async function refresh() {
   state.events = await window.reminderApi.listEvents();
-  const eventIds = new Set(state.events.map((x) => x.id));
-  state.selectedIds = new Set([...state.selectedIds].filter((id) => eventIds.has(id)));
+  const ids = new Set(state.events.map((x) => x.id));
+  state.selectedIds = new Set([...state.selectedIds].filter((id) => ids.has(id)));
   render();
 }
 
 function parseDueAt() {
   if (!els.dueAt.value) return "";
   const d = new Date(els.dueAt.value);
-  if (Number.isNaN(d.getTime())) {
-    throw new Error("DDL 时间格式无效");
-  }
+  if (Number.isNaN(d.getTime())) throw new Error("DDL 时间格式无效");
   return d.toISOString();
+}
+
+function parseRecurrence() {
+  if (!els.recurrenceEnabled.checked) {
+    return {
+      enabled: false,
+      freq: "daily",
+      interval: 1,
+      endDate: "",
+      maxOccurrences: 0,
+      occurrenceIndex: 1,
+      seriesId: ""
+    };
+  }
+
+  const interval = Math.max(1, Math.min(365, Number(els.recurrenceInterval.value) || 1));
+  const maxOccurrences = Math.max(0, Math.min(999, Number(els.recurrenceMaxOccurrences.value) || 0));
+  const endDate = els.recurrenceEndDate.value ? new Date(`${els.recurrenceEndDate.value}T23:59:59`).toISOString() : "";
+
+  return {
+    enabled: true,
+    freq: els.recurrenceFreq.value || "daily",
+    interval,
+    endDate,
+    maxOccurrences,
+    occurrenceIndex: 1,
+    seriesId: ""
+  };
 }
 
 function getReminderSettingsFromUI() {
@@ -368,27 +500,83 @@ function applyReminderSettings(settings) {
 }
 
 function showInAppReminder(payload) {
-  if (!els.inAppReminder) return;
   const title = payload?.title || "提醒";
   const body = payload?.body || "";
   const time = new Date().toLocaleTimeString();
   els.inAppReminder.innerHTML = `<strong>${esc(title)}</strong><br>${esc(body).replaceAll("\n", "<br>")}<br><small>${time}</small>`;
   els.inAppReminder.classList.remove("hidden");
 
-  if (reminderBannerTimer) {
-    clearTimeout(reminderBannerTimer);
-  }
+  if (reminderBannerTimer) clearTimeout(reminderBannerTimer);
   reminderBannerTimer = setTimeout(() => {
     els.inAppReminder.classList.add("hidden");
   }, 9000);
 }
+
+function bindWorkspaceTabs() {
+  const panes = {
+    overview: document.getElementById("pane-overview"),
+    events: document.getElementById("pane-events"),
+    settings: document.getElementById("pane-settings")
+  };
+
+  const setPane = (pane) => {
+    for (const [key, node] of Object.entries(panes)) {
+      if (!node) continue;
+      node.classList.toggle("active", key === pane);
+    }
+    for (const btn of els.workspaceTabs.querySelectorAll("button[data-pane]")) {
+      btn.classList.toggle("active", btn.dataset.pane === pane);
+    }
+  };
+
+  els.workspaceTabs.addEventListener("click", (event) => {
+    const btn = event.target.closest("button[data-pane]");
+    if (!btn) return;
+    setPane(btn.dataset.pane || "overview");
+  });
+
+  setPane("overview");
+}
+
+els.addSubtaskBtn.addEventListener("click", () => {
+  const text = String(els.subtaskInput.value || "").trim();
+  if (!text) return;
+  state.formSubtasks.push({
+    id: `sub_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
+    text: text.slice(0, 120),
+    completed: false
+  });
+  els.subtaskInput.value = "";
+  renderSubtaskEditor();
+});
+
+els.subtaskInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    els.addSubtaskBtn.click();
+  }
+});
+
+els.subtaskList.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-action]");
+  if (!target) return;
+  const id = target.dataset.id;
+  if (!id) return;
+
+  if (target.dataset.action === "delete-subtask") {
+    state.formSubtasks = state.formSubtasks.filter((x) => x.id !== id);
+  }
+  if (target.dataset.action === "toggle-subtask") {
+    state.formSubtasks = state.formSubtasks.map((x) => x.id === id ? { ...x, completed: !x.completed } : x);
+  }
+  renderSubtaskEditor();
+});
 
 els.form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   try {
     const dueAt = parseDueAt();
-
     if (dueAt && new Date(dueAt).getTime() < Date.now()) {
       const ok = confirm("该 DDL 早于当前时间，仍然保存吗？");
       if (!ok) return;
@@ -399,7 +587,10 @@ els.form.addEventListener("submit", async (event) => {
       title: els.title.value.trim(),
       note: els.note.value.trim(),
       priority: els.priority.value,
-      dueAt
+      dueAt,
+      tags: parseTags(els.tags.value),
+      subtasks: state.formSubtasks,
+      recurrence: parseRecurrence()
     };
 
     if (!payload.title) {
@@ -408,6 +599,11 @@ els.form.addEventListener("submit", async (event) => {
     }
 
     if (payload.id) {
+      const current = state.events.find((x) => x.id === payload.id);
+      if (current?.recurrence?.seriesId) {
+        payload.recurrence.seriesId = current.recurrence.seriesId;
+        payload.recurrence.occurrenceIndex = current.recurrence.occurrenceIndex || 1;
+      }
       await window.reminderApi.updateEvent(payload);
     } else {
       await window.reminderApi.addEvent(payload);
@@ -420,9 +616,7 @@ els.form.addEventListener("submit", async (event) => {
   }
 });
 
-els.cancelEdit.addEventListener("click", () => {
-  resetForm();
-});
+els.cancelEdit.addEventListener("click", () => resetForm());
 
 els.viewTabs.addEventListener("click", (event) => {
   const btn = event.target.closest("button[data-view]");
@@ -443,11 +637,8 @@ els.viewContent.addEventListener("click", async (event) => {
   if (!id) return;
 
   if (action === "select") {
-    if (target.checked) {
-      state.selectedIds.add(id);
-    } else {
-      state.selectedIds.delete(id);
-    }
+    if (target.checked) state.selectedIds.add(id);
+    else state.selectedIds.delete(id);
     updateBatchButtons(filteredEvents());
     return;
   }
@@ -459,22 +650,18 @@ els.viewContent.addEventListener("click", async (event) => {
   }
 
   if (action === "delete") {
-    const yes = confirm("确定删除该事件吗？");
-    if (!yes) return;
+    const ok = confirm("确定删除该事件吗？");
+    if (!ok) return;
     await window.reminderApi.deleteEvent(id);
     state.selectedIds.delete(id);
-    if (els.id.value === id) {
-      resetForm();
-    }
+    if (els.id.value === id) resetForm();
     await refresh();
     return;
   }
 
   if (action === "edit") {
     const item = state.events.find((x) => x.id === id);
-    if (item) {
-      startEdit(item);
-    }
+    if (item) startEdit(item);
   }
 });
 
@@ -483,21 +670,21 @@ function bindFilterEvents() {
     state.filters.keyword = els.searchKeyword.value;
     render();
   });
-
   els.filterPriority.addEventListener("change", () => {
     state.filters.priority = els.filterPriority.value;
     render();
   });
-
   els.filterStatus.addEventListener("change", () => {
     state.filters.status = els.filterStatus.value;
     render();
   });
+  els.filterTag.addEventListener("input", () => {
+    state.filters.tag = els.filterTag.value;
+    render();
+  });
 
   els.selectVisibleBtn.addEventListener("click", () => {
-    for (const item of filteredEvents()) {
-      state.selectedIds.add(item.id);
-    }
+    for (const item of filteredEvents()) state.selectedIds.add(item.id);
     render();
   });
 
@@ -509,42 +696,30 @@ function bindFilterEvents() {
   els.batchCompleteBtn.addEventListener("click", async () => {
     const ids = [...state.selectedIds];
     if (!ids.length) return;
-
     for (const id of ids) {
       const current = state.events.find((x) => x.id === id);
       if (!current || current.completed) continue;
       await window.reminderApi.updateEvent({ ...current, completed: true });
     }
-
     await refresh();
   });
 
   els.batchDeleteBtn.addEventListener("click", async () => {
     const ids = [...state.selectedIds];
     if (!ids.length) return;
-    const yes = confirm(`确定删除已选择的 ${ids.length} 条事件吗？`);
-    if (!yes) return;
-
+    const ok = confirm(`确定删除已选择的 ${ids.length} 条事件吗？`);
+    if (!ok) return;
     for (const id of ids) {
       await window.reminderApi.deleteEvent(id);
       state.selectedIds.delete(id);
     }
-
-    if (ids.includes(els.id.value)) {
-      resetForm();
-    }
+    if (ids.includes(els.id.value)) resetForm();
     await refresh();
   });
 }
 
 function bindReminderEvents() {
-  for (const input of [
-    els.reminderEnabled,
-    els.reminderDay,
-    els.reminderHour,
-    els.reminderTenMin,
-    els.reminderOverdue
-  ]) {
+  for (const input of [els.reminderEnabled, els.reminderDay, els.reminderHour, els.reminderTenMin, els.reminderOverdue]) {
     input.addEventListener("change", async () => {
       state.settings = await window.reminderApi.updateSettings(getReminderSettingsFromUI());
       applyReminderSettings(state.settings);
@@ -560,10 +735,6 @@ els.alwaysOnTop.addEventListener("change", async () => {
   state.settings = await window.reminderApi.updateSettings({ alwaysOnTop: els.alwaysOnTop.checked });
 });
 
-els.hideBtn.addEventListener("click", async () => {
-  await window.reminderApi.hideToTray();
-});
-
 async function boot() {
   const settings = await window.reminderApi.getSettings();
   state.settings = settings;
@@ -572,9 +743,9 @@ async function boot() {
   applyReminderSettings(settings);
   bindFilterEvents();
   bindReminderEvents();
-  window.reminderApi.onReminder((payload) => {
-    showInAppReminder(payload);
-  });
+  bindWorkspaceTabs();
+  window.reminderApi.onReminder((payload) => showInAppReminder(payload));
+  resetForm();
   await refresh();
 }
 
