@@ -1,6 +1,5 @@
 ﻿const state = {
   events: [],
-  selectedIds: new Set(),
   currentView: "list",
   formSubtasks: [],
   filters: {
@@ -28,6 +27,10 @@ const els = {
   inAppReminder: document.getElementById("inAppReminder"),
   form: document.getElementById("eventForm"),
   formTitle: document.getElementById("formTitle"),
+  creatorOverlay: document.getElementById("creatorOverlay"),
+  creatorPanel: document.getElementById("creatorPanel"),
+  openCreatorBtn: document.getElementById("openCreatorBtn"),
+  closeCreatorBtn: document.getElementById("closeCreatorBtn"),
   id: document.getElementById("eventId"),
   title: document.getElementById("title"),
   note: document.getElementById("note"),
@@ -59,16 +62,17 @@ const els = {
   filterPriority: document.getElementById("filterPriority"),
   filterStatus: document.getElementById("filterStatus"),
   filterTag: document.getElementById("filterTag"),
-  selectVisibleBtn: document.getElementById("selectVisibleBtn"),
-  clearSelectionBtn: document.getElementById("clearSelectionBtn"),
-  batchCompleteBtn: document.getElementById("batchCompleteBtn"),
-  batchDeleteBtn: document.getElementById("batchDeleteBtn"),
   autoStart: document.getElementById("autoStart"),
   alwaysOnTop: document.getElementById("alwaysOnTop"),
   emptyTemplate: document.getElementById("emptyTemplate")
 };
 
 let reminderBannerTimer = null;
+
+function setCreatorOpen(open) {
+  if (!els.creatorOverlay) return;
+  els.creatorOverlay.classList.toggle("hidden", !open);
+}
 
 const priorityLabel = {
   urgent: "紧急",
@@ -105,6 +109,19 @@ function isOverdue(item) {
   return Number.isFinite(due) && due < Date.now();
 }
 
+function getEventStatus(item) {
+  if (isOverdue(item)) return "overdue";
+  if (item.completed) return "completed";
+  return "active";
+}
+
+function getEventStatusLabel(item) {
+  const status = getEventStatus(item);
+  if (status === "overdue") return "已逾期";
+  if (status === "completed") return "已完成";
+  return "进行中";
+}
+
 function esc(text) {
   return String(text || "")
     .replaceAll("&", "&amp;")
@@ -115,10 +132,21 @@ function esc(text) {
 
 function sortedEvents(events) {
   return [...events].sort((a, b) => {
-    const ta = a.dueAt ? new Date(a.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
-    const tb = b.dueAt ? new Date(b.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+    const aCompleted = Boolean(a.completed);
+    const bCompleted = Boolean(b.completed);
+    if (aCompleted !== bCompleted) return aCompleted ? 1 : -1;
+
+    const taRaw = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
+    const tbRaw = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
+    const ta = Number.isFinite(taRaw) ? taRaw : Number.POSITIVE_INFINITY;
+    const tb = Number.isFinite(tbRaw) ? tbRaw : Number.POSITIVE_INFINITY;
     if (ta !== tb) return ta - tb;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+
+    // Tertiary order for equal deadlines: recently updated first.
+    const ua = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const ub = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    if (ua !== ub) return ub - ua;
+    return String(a.id || "").localeCompare(String(b.id || ""));
   });
 }
 
@@ -136,7 +164,7 @@ function filteredEvents() {
 
   return sortedEvents(state.events).filter((item) => {
     if (state.filters.priority !== "all" && item.priority !== state.filters.priority) return false;
-    if (state.filters.status === "active" && item.completed) return false;
+    if (state.filters.status === "active" && (item.completed || isOverdue(item))) return false;
     if (state.filters.status === "completed" && !item.completed) return false;
     if (state.filters.status === "overdue" && !isOverdue(item)) return false;
 
@@ -158,15 +186,8 @@ function subtaskProgress(item) {
   return `${done}/${subtasks.length}`;
 }
 
-function updateBatchButtons(visibleEvents) {
-  const selectedCount = state.selectedIds.size;
-  const visibleCount = visibleEvents.length;
-
-  els.resultStat.textContent = `当前显示 ${visibleCount} 条，已选择 ${selectedCount} 条`;
-  els.selectVisibleBtn.disabled = visibleCount === 0;
-  els.clearSelectionBtn.disabled = selectedCount === 0;
-  els.batchCompleteBtn.disabled = selectedCount === 0;
-  els.batchDeleteBtn.disabled = selectedCount === 0;
+function updateResultStat(visibleEvents) {
+  els.resultStat.textContent = `当前显示 ${visibleEvents.length} 条`;
 }
 
 function renderSubtaskEditor() {
@@ -226,6 +247,7 @@ function startEdit(item) {
   els.formTitle.textContent = "编辑事件";
   els.saveBtn.textContent = "更新事件";
   els.cancelEdit.classList.remove("hidden");
+  setCreatorOpen(true);
 }
 
 function recurrenceLabel(rec) {
@@ -236,15 +258,14 @@ function recurrenceLabel(rec) {
 
 function renderList(events) {
   const html = events.map((item) => `
-    <article class="card ${esc(item.priority)} ${item.completed ? "completed" : ""}">
-      <label class="select-cell"><input data-action="select" data-id="${esc(item.id)}" class="select-check" type="checkbox" ${state.selectedIds.has(item.id) ? "checked" : ""} /></label>
+    <article class="card ${esc(item.priority)} ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
       <div class="card-main">
         <h3>${esc(item.title)}</h3>
         <p>${esc(item.note || "无备注")}</p>
         <div class="meta">
           <span class="tag">${priorityLabel[item.priority] || "日常"}</span>
           <span class="tag ${isOverdue(item) ? "due-overdue" : ""}">DDL: ${esc(fmtDateTime(item.dueAt))}</span>
-          <span class="tag">状态: ${item.completed ? "已完成" : "进行中"}</span>
+          <span class="tag ${isOverdue(item) ? "status-overdue" : ""}">状态: ${getEventStatusLabel(item)}</span>
           <span class="tag">子任务: ${esc(subtaskProgress(item))}</span>
           <span class="tag">重复: ${esc(recurrenceLabel(item.recurrence))}</span>
           ${(item.tags || []).map((t) => `<span class="tag-soft">#${esc(t)}</span>`).join("")}
@@ -262,15 +283,14 @@ function renderList(events) {
 
 function renderTable(events) {
   const rows = events.map((item) => `
-    <tr class="${item.completed ? "completed" : ""}">
-      <td><input data-action="select" data-id="${esc(item.id)}" class="select-check" type="checkbox" ${state.selectedIds.has(item.id) ? "checked" : ""} /></td>
+    <tr class="tbl-row ${esc(item.priority)} ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
       <td>${esc(item.title)}</td>
       <td>${priorityLabel[item.priority] || "日常"}</td>
       <td>${esc((item.tags || []).join(", ") || "-")}</td>
       <td>${esc(subtaskProgress(item))}</td>
       <td>${esc(recurrenceLabel(item.recurrence))}</td>
       <td><span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></td>
-      <td>${item.completed ? "已完成" : "进行中"}</td>
+      <td><span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${getEventStatusLabel(item)}</span></td>
       <td>
         <button data-action="toggle" data-id="${esc(item.id)}" class="ghost">切换完成</button>
         <button data-action="edit" data-id="${esc(item.id)}" class="ghost">编辑</button>
@@ -283,7 +303,6 @@ function renderTable(events) {
     <table class="table">
       <thead>
         <tr>
-          <th>选中</th>
           <th>标题</th>
           <th>粒度</th>
           <th>标签</th>
@@ -301,12 +320,12 @@ function renderTable(events) {
 
 function renderTimeline(events) {
   const html = events.map((item) => `
-    <div class="tl-item ${item.completed ? "completed" : ""}">
+    <div class="tl-item ${esc(item.priority)} ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
       <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
         <strong>${esc(item.title)}</strong>
-        <label class="select-cell"><input data-action="select" data-id="${esc(item.id)}" class="select-check" type="checkbox" ${state.selectedIds.has(item.id) ? "checked" : ""} /></label>
       </div>
       <div>${priorityLabel[item.priority] || "日常"} | DDL: <span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></div>
+      <div>状态：<span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${getEventStatusLabel(item)}</span></div>
       <div>标签：${esc((item.tags || []).join(", ") || "无")}</div>
       <div>子任务进度：${esc(subtaskProgress(item))}</div>
       <div>重复：${esc(recurrenceLabel(item.recurrence))}</div>
@@ -345,7 +364,10 @@ function renderCalendar(events) {
   for (let day = 1; day <= last.getDate(); day += 1) {
     const key = `${y}-${pad(m + 1)}-${pad(day)}`;
     const items = map.get(key) || [];
-    const list = items.slice(0, 3).map((it) => `<div class="dot-item">${esc(it.title)}</div>`).join("");
+    const list = items
+      .slice(0, 3)
+      .map((it) => `<div class="dot-item ${it.completed ? "completed" : ""} ${isOverdue(it) ? "overdue" : ""}">${esc(it.title)}</div>`)
+      .join("");
     const more = items.length > 3 ? `<div class="dot-item">+${items.length - 3} 更多</div>` : "";
     cells.push(`<div class="day"><div class="day-head">${day} 日</div>${list}${more}</div>`);
   }
@@ -384,6 +406,7 @@ function renderTodayPanel() {
 function renderStatsPanel() {
   const total = state.events.length;
   const active = state.events.filter((x) => !x.completed).length;
+  const done = state.events.filter((x) => x.completed).length;
   const overdue = state.events.filter((x) => isOverdue(x)).length;
 
   const today = normalizeDate(new Date().toISOString());
@@ -392,28 +415,20 @@ function renderStatsPanel() {
   const urgentAll = state.events.filter((x) => x.priority === "urgent").length;
   const urgentDone = state.events.filter((x) => x.priority === "urgent" && x.completed).length;
   const urgentRate = urgentAll ? Math.round((urgentDone / urgentAll) * 100) : 0;
-
-  const recent7 = [];
-  for (let i = 0; i < 7; i += 1) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const key = normalizeDate(d.toISOString());
-    const count = state.events.filter((x) => x.completed && x.completedAt && normalizeDate(x.completedAt) === key).length;
-    recent7.push(count);
-  }
+  const completeRate = total ? Math.round((done / total) * 100) : 0;
 
   els.statsPanel.innerHTML = `
     <article class="stat-card"><small>总事件</small><strong>${total}</strong></article>
     <article class="stat-card"><small>进行中</small><strong>${active}</strong></article>
     <article class="stat-card"><small>今日完成</small><strong>${completedToday}</strong></article>
     <article class="stat-card"><small>逾期数量</small><strong>${overdue}</strong></article>
-    <article class="stat-card"><small>紧急完成率</small><strong>${urgentRate}%</strong><div><small>近7天完成: ${recent7.reverse().join("/")}</small></div></article>
+    <article class="stat-card"><small>总完成率 / 紧急完成率</small><strong>${completeRate}% / ${urgentRate}%</strong></article>
   `;
 }
 
 function render() {
   const events = filteredEvents();
-  updateBatchButtons(events);
+  updateResultStat(events);
   renderTodayPanel();
   renderStatsPanel();
 
@@ -435,8 +450,6 @@ function render() {
 
 async function refresh() {
   state.events = await window.reminderApi.listEvents();
-  const ids = new Set(state.events.map((x) => x.id));
-  state.selectedIds = new Set([...state.selectedIds].filter((id) => ids.has(id)));
   render();
 }
 
@@ -610,13 +623,41 @@ els.form.addEventListener("submit", async (event) => {
     }
 
     resetForm();
+    setCreatorOpen(false);
     await refresh();
   } catch (err) {
     alert(err.message || "保存失败");
   }
 });
 
-els.cancelEdit.addEventListener("click", () => resetForm());
+els.cancelEdit.addEventListener("click", () => {
+  resetForm();
+  setCreatorOpen(false);
+});
+
+els.openCreatorBtn.addEventListener("click", () => {
+  resetForm();
+  setCreatorOpen(true);
+});
+
+els.closeCreatorBtn.addEventListener("click", () => {
+  resetForm();
+  setCreatorOpen(false);
+});
+
+els.creatorOverlay.addEventListener("click", (event) => {
+  if (event.target === els.creatorOverlay) {
+    resetForm();
+    setCreatorOpen(false);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !els.creatorOverlay.classList.contains("hidden")) {
+    resetForm();
+    setCreatorOpen(false);
+  }
+});
 
 els.viewTabs.addEventListener("click", (event) => {
   const btn = event.target.closest("button[data-view]");
@@ -636,13 +677,6 @@ els.viewContent.addEventListener("click", async (event) => {
   const id = target.dataset.id;
   if (!id) return;
 
-  if (action === "select") {
-    if (target.checked) state.selectedIds.add(id);
-    else state.selectedIds.delete(id);
-    updateBatchButtons(filteredEvents());
-    return;
-  }
-
   if (action === "toggle") {
     await window.reminderApi.toggleEvent(id);
     await refresh();
@@ -653,7 +687,6 @@ els.viewContent.addEventListener("click", async (event) => {
     const ok = confirm("确定删除该事件吗？");
     if (!ok) return;
     await window.reminderApi.deleteEvent(id);
-    state.selectedIds.delete(id);
     if (els.id.value === id) resetForm();
     await refresh();
     return;
@@ -681,40 +714,6 @@ function bindFilterEvents() {
   els.filterTag.addEventListener("input", () => {
     state.filters.tag = els.filterTag.value;
     render();
-  });
-
-  els.selectVisibleBtn.addEventListener("click", () => {
-    for (const item of filteredEvents()) state.selectedIds.add(item.id);
-    render();
-  });
-
-  els.clearSelectionBtn.addEventListener("click", () => {
-    state.selectedIds.clear();
-    render();
-  });
-
-  els.batchCompleteBtn.addEventListener("click", async () => {
-    const ids = [...state.selectedIds];
-    if (!ids.length) return;
-    for (const id of ids) {
-      const current = state.events.find((x) => x.id === id);
-      if (!current || current.completed) continue;
-      await window.reminderApi.updateEvent({ ...current, completed: true });
-    }
-    await refresh();
-  });
-
-  els.batchDeleteBtn.addEventListener("click", async () => {
-    const ids = [...state.selectedIds];
-    if (!ids.length) return;
-    const ok = confirm(`确定删除已选择的 ${ids.length} 条事件吗？`);
-    if (!ok) return;
-    for (const id of ids) {
-      await window.reminderApi.deleteEvent(id);
-      state.selectedIds.delete(id);
-    }
-    if (ids.includes(els.id.value)) resetForm();
-    await refresh();
   });
 }
 
@@ -750,3 +749,6 @@ async function boot() {
 }
 
 boot();
+
+
+

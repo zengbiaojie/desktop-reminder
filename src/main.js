@@ -234,10 +234,23 @@ function getPreferredNativeIcon() {
 }
 
 function applyAutoStart(enabled) {
+  const openAtLogin = Boolean(enabled);
+
+  if (app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin,
+      path: process.execPath,
+      args: []
+    });
+    return;
+  }
+
+  // Dev mode: point to Electron executable and pass app folder,
+  // otherwise Windows may open the default Electron app on login.
   app.setLoginItemSettings({
-    openAtLogin: Boolean(enabled),
+    openAtLogin,
     path: process.execPath,
-    args: []
+    args: [app.getAppPath()]
   });
 }
 
@@ -560,6 +573,69 @@ function maybeGenerateRecurringNext(state, prevEvent, nextEvent) {
   state.events.push(next);
 }
 
+function spawnRecurringNextForOverdue(state, item, nowMs) {
+  if (!item || item.completed || !item.dueAt) return false;
+
+  const rec = normalizeRecurrence(item.recurrence);
+  if (!rec.enabled) return false;
+
+  const dueMs = new Date(item.dueAt).getTime();
+  if (!Number.isFinite(dueMs) || dueMs > nowMs) return false;
+
+  const currentIndex = Math.max(1, Number(rec.occurrenceIndex || 1));
+  const nextIndex = currentIndex + 1;
+  if (rec.maxOccurrences > 0 && nextIndex > rec.maxOccurrences) return false;
+
+  const nextDueAt = addDuration(item.dueAt, rec.freq, rec.interval);
+  if (!nextDueAt) return false;
+
+  if (rec.endDate) {
+    const endMs = new Date(rec.endDate).getTime();
+    const nextMs = new Date(nextDueAt).getTime();
+    if (Number.isFinite(endMs) && Number.isFinite(nextMs) && nextMs > endMs) return false;
+  }
+
+  const seriesId = rec.seriesId || item.id;
+  const exists = state.events.some((x) => x.recurrence?.seriesId === seriesId && x.recurrence?.occurrenceIndex === nextIndex);
+  if (exists) return false;
+
+  item.recurrence = {
+    ...rec,
+    enabled: true,
+    seriesId,
+    occurrenceIndex: currentIndex
+  };
+  item.updatedAt = nowIso();
+
+  const next = {
+    id: makeId("evt"),
+    title: item.title,
+    note: item.note,
+    priority: item.priority,
+    dueAt: nextDueAt,
+    completed: false,
+    completedAt: "",
+    tags: [...(item.tags || [])],
+    subtasks: (item.subtasks || []).map((x) => ({
+      id: makeId("sub"),
+      text: x.text,
+      completed: false
+    })),
+    recurrence: {
+      ...rec,
+      enabled: true,
+      seriesId,
+      occurrenceIndex: nextIndex
+    },
+    notifiedKeys: [],
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+
+  state.events.push(next);
+  return true;
+}
+
 function runReminderCheck() {
   const state = readState();
   const reminders = state.settings?.reminders || defaultState.settings.reminders;
@@ -569,8 +645,12 @@ function runReminderCheck() {
   const now = Date.now();
   let changed = false;
 
-  for (const item of state.events) {
+  for (const item of [...state.events]) {
     if (item.completed || !item.dueAt) continue;
+
+    if (spawnRecurringNextForOverdue(state, item, now)) {
+      changed = true;
+    }
 
     const dueMs = new Date(item.dueAt).getTime();
     if (Number.isNaN(dueMs)) continue;
