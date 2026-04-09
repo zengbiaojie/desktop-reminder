@@ -48,6 +48,7 @@ const els = {
   recurrenceEndDate: document.getElementById("recurrenceEndDate"),
   recurrenceMaxOccurrences: document.getElementById("recurrenceMaxOccurrences"),
   subtaskInput: document.getElementById("subtaskInput"),
+  subtaskDueAt: document.getElementById("subtaskDueAt"),
   addSubtaskBtn: document.getElementById("addSubtaskBtn"),
   subtaskList: document.getElementById("subtaskList"),
   saveBtn: document.getElementById("saveBtn"),
@@ -57,6 +58,8 @@ const els = {
   viewTabs: document.getElementById("viewTabs"),
   viewContent: document.getElementById("viewContent"),
   todayPanel: document.getElementById("todayPanel"),
+  riskPanel: document.getElementById("riskPanel"),
+  loadPanel: document.getElementById("loadPanel"),
   reminderEnabled: document.getElementById("reminderEnabled"),
   reminderDay: document.getElementById("reminderDay"),
   reminderHour: document.getElementById("reminderHour"),
@@ -130,6 +133,13 @@ function toLocalInputValue(dateLike) {
   const d = new Date(dateLike);
   if (Number.isNaN(d.getTime())) return "";
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function normalizeSubtaskDueAt(dateLike) {
+  if (!dateLike) return "";
+  const d = new Date(dateLike);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString();
 }
 
 function isOverdue(item) {
@@ -217,7 +227,24 @@ function subtaskProgress(item) {
 
 function getEventSubtasks(item) {
   const subtasks = Array.isArray(item.subtasks) ? item.subtasks : [];
-  return subtasks.filter((x) => String(x?.text || "").trim());
+  return subtasks
+    .filter((x) => String(x?.text || "").trim())
+    .map((x, index) => {
+      const orderRaw = Number(x?.order);
+      const order = Number.isFinite(orderRaw) ? Math.max(1, Math.round(orderRaw)) : index + 1;
+      return {
+        ...x,
+        order
+      };
+    })
+    .sort((a, b) => {
+      if (a.order !== b.order) return a.order - b.order;
+      return String(a.id || "").localeCompare(String(b.id || ""));
+    })
+    .map((x, index) => ({
+      ...x,
+      order: index + 1
+    }));
 }
 
 function renderSubtaskSection(item, compact = false) {
@@ -235,8 +262,28 @@ function renderSubtaskSection(item, compact = false) {
           data-sub-id="${esc(sub.id)}"
           ${sub.completed ? "checked" : ""}
         />
+        <span class="subtask-order">#${sub.order}</span>
         <span>${esc(sub.text || "")}</span>
       </label>
+      <span class="subtask-due">${sub.dueAt ? `DDL: ${esc(fmtDateTime(sub.dueAt))}` : "No DDL"}</span>
+      <div class="subtask-inline-actions">
+        <button
+          type="button"
+          class="ghost"
+          data-action="move-subtask-up"
+          data-id="${esc(item.id)}"
+          data-sub-id="${esc(sub.id)}"
+          ${sub.order <= 1 ? "disabled" : ""}
+        >UP</button>
+        <button
+          type="button"
+          class="ghost"
+          data-action="move-subtask-down"
+          data-id="${esc(item.id)}"
+          data-sub-id="${esc(sub.id)}"
+          ${sub.order >= subtasks.length ? "disabled" : ""}
+        >DN</button>
+      </div>
       <button
         type="button"
         class="danger ghost subtask-del-btn"
@@ -259,7 +306,15 @@ async function patchEventSubtasks(eventId, updater) {
   const item = state.events.find((x) => x.id === eventId);
   if (!item) return;
   const current = Array.isArray(item.subtasks) ? item.subtasks : [];
-  const nextSubtasks = updater(current).filter((x) => String(x?.text || "").trim());
+  const nextSubtasks = updater(current)
+    .filter((x) => String(x?.text || "").trim())
+    .map((x, index) => ({
+      id: x?.id || `sub_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
+      text: String(x?.text || "").trim().slice(0, 120),
+      completed: Boolean(x?.completed),
+      dueAt: normalizeSubtaskDueAt(x?.dueAt),
+      order: index + 1
+    }));
   await window.reminderApi.updateEvent({
     id: eventId,
     subtasks: nextSubtasks
@@ -277,12 +332,26 @@ function renderSubtaskEditor() {
     return;
   }
 
-  els.subtaskList.innerHTML = state.formSubtasks.map((sub) => `
-    <label class="subtask-row ${sub.completed ? "done" : ""}">
-      <input type="checkbox" data-action="toggle-subtask" data-id="${esc(sub.id)}" ${sub.completed ? "checked" : ""} />
-      <span>${esc(sub.text)}</span>
-      <button type="button" class="danger" data-action="delete-subtask" data-id="${esc(sub.id)}">删除</button>
-    </label>
+  els.subtaskList.innerHTML = state.formSubtasks.map((sub, index) => `
+    <div class="subtask-row ${sub.completed ? "done" : ""}">
+      <label class="subtask-check">
+        <input type="checkbox" data-action="toggle-subtask" data-id="${esc(sub.id)}" ${sub.completed ? "checked" : ""} />
+        <span class="subtask-order">#${index + 1}</span>
+        <span>${esc(sub.text)}</span>
+      </label>
+      <input
+        type="datetime-local"
+        class="subtask-due-input"
+        data-action="set-subtask-due"
+        data-id="${esc(sub.id)}"
+        value="${esc(toLocalInputValue(sub.dueAt))}"
+      />
+      <div class="subtask-inline-actions">
+        <button type="button" class="ghost" data-action="move-subtask-up-local" data-id="${esc(sub.id)}" ${index === 0 ? "disabled" : ""}>UP</button>
+        <button type="button" class="ghost" data-action="move-subtask-down-local" data-id="${esc(sub.id)}" ${index === state.formSubtasks.length - 1 ? "disabled" : ""}>DN</button>
+      </div>
+      <button type="button" class="danger subtask-del-btn" data-action="delete-subtask" data-id="${esc(sub.id)}">Delete</button>
+    </div>
   `).join("");
 }
 
@@ -298,6 +367,7 @@ function resetForm() {
   els.recurrenceInterval.value = "1";
   els.recurrenceEndDate.value = "";
   els.recurrenceMaxOccurrences.value = "0";
+  if (els.subtaskDueAt) els.subtaskDueAt.value = "";
   state.formSubtasks = [];
   renderSubtaskEditor();
   els.formTitle.textContent = "新增事件";
@@ -321,7 +391,13 @@ function startEdit(item) {
   els.recurrenceMaxOccurrences.value = String(rec.maxOccurrences || 0);
 
   state.formSubtasks = Array.isArray(item.subtasks)
-    ? item.subtasks.map((x) => ({ id: x.id || `sub_${Math.random()}`, text: x.text || "", completed: Boolean(x.completed) }))
+    ? getEventSubtasks(item).map((x, index) => ({
+      id: x.id || `sub_${Math.random()}`,
+      text: x.text || "",
+      completed: Boolean(x.completed),
+      dueAt: normalizeSubtaskDueAt(x.dueAt),
+      order: index + 1
+    }))
     : [];
   renderSubtaskEditor();
 
@@ -383,8 +459,28 @@ function renderTable(events) {
                       data-sub-id="${esc(sub.id)}"
                       ${sub.completed ? "checked" : ""}
                     />
+                    <span class="subtask-order">#${sub.order}</span>
                     <span>${esc(sub.text || "")}</span>
                   </label>
+                  <span class="subtask-due">${sub.dueAt ? `DDL: ${esc(fmtDateTime(sub.dueAt))}` : "No DDL"}</span>
+                  <div class="subtask-inline-actions">
+                    <button
+                      type="button"
+                      class="ghost"
+                      data-action="move-subtask-up"
+                      data-id="${esc(item.id)}"
+                      data-sub-id="${esc(sub.id)}"
+                      ${sub.order <= 1 ? "disabled" : ""}
+                    >UP</button>
+                    <button
+                      type="button"
+                      class="ghost"
+                      data-action="move-subtask-down"
+                      data-id="${esc(item.id)}"
+                      data-sub-id="${esc(sub.id)}"
+                      ${sub.order >= subtasks.length ? "disabled" : ""}
+                    >DN</button>
+                  </div>
                   <button
                     type="button"
                     class="danger ghost subtask-del-btn"
@@ -581,6 +677,107 @@ function buildTodayList(items, emptyText) {
   `).join("");
 }
 
+function dueCountdownText(dateLike) {
+  if (!dateLike) return "无 DDL";
+  const dueMs = new Date(dateLike).getTime();
+  if (!Number.isFinite(dueMs)) return "无 DDL";
+  const diff = dueMs - Date.now();
+  const abs = Math.abs(diff);
+  const minutes = Math.floor(abs / (60 * 1000));
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (diff < 0) {
+    if (days > 0) return `已逾期 ${days}天`;
+    if (hours > 0) return `已逾期 ${hours}小时`;
+    return `已逾期 ${Math.max(1, minutes)}分钟`;
+  }
+
+  if (days > 0) return `${days}天后到期`;
+  if (hours > 0) return `${hours}小时后到期`;
+  return `${Math.max(1, minutes)}分钟后到期`;
+}
+
+function getRiskScore(item) {
+  if (!item || item.completed) return Number.NEGATIVE_INFINITY;
+  let score = 0;
+  if (item.priority === "urgent") score += 50;
+  else if (item.priority === "important") score += 30;
+  else score += 10;
+
+  const dueMs = item.dueAt ? new Date(item.dueAt).getTime() : Number.NaN;
+  if (!Number.isFinite(dueMs)) return score;
+
+  const diffHours = (dueMs - Date.now()) / (60 * 60 * 1000);
+  if (diffHours < 0) score += 60;
+  else if (diffHours <= 6) score += 45;
+  else if (diffHours <= 24) score += 30;
+  else if (diffHours <= 72) score += 18;
+  else if (diffHours <= 168) score += 8;
+
+  return score;
+}
+
+function renderRiskPanel() {
+  if (!els.riskPanel) return;
+  const candidates = state.events
+    .filter((x) => !x.completed)
+    .map((item) => ({ item, score: getRiskScore(item) }))
+    .filter((x) => Number.isFinite(x.score))
+    .sort((a, b) => b.score - a.score || new Date(a.item.dueAt || 0).getTime() - new Date(b.item.dueAt || 0).getTime())
+    .slice(0, 5);
+
+  if (!candidates.length) {
+    els.riskPanel.innerHTML = '<div class="today-item"><small>暂无高风险任务</small></div>';
+    return;
+  }
+
+  els.riskPanel.innerHTML = candidates.map(({ item, score }) => `
+    <div class="risk-item ${esc(item.priority)} ${isOverdue(item) ? "overdue" : ""}">
+      <div class="risk-main">
+        <strong>${esc(item.title)}</strong>
+        <small>${esc(dueCountdownText(item.dueAt))}</small>
+      </div>
+      <div class="risk-side">
+        <span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${esc(getEventStatusLabel(item))}</span>
+        <span class="tag-soft">风险 ${Math.round(score)}</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderLoadPanel() {
+  if (!els.loadPanel) return;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = [];
+  const activeWithDue = state.events.filter((x) => !x.completed && x.dueAt);
+
+  for (let i = 0; i < 7; i += 1) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const key = normalizeDate(d.toISOString());
+    const count = activeWithDue.filter((x) => normalizeDate(x.dueAt) === key).length;
+    days.push({ key, day: `${d.getMonth() + 1}/${d.getDate()}`, count });
+  }
+
+  const maxCount = Math.max(1, ...days.map((x) => x.count));
+  const bars = days.map((x) => {
+    const h = Math.max(8, Math.round((x.count / maxCount) * 100));
+    return `
+      <div class="load-col">
+        <div class="load-bar-wrap">
+          <div class="load-bar ${x.count >= 5 ? "hot" : x.count >= 3 ? "warm" : ""}" style="height:${h}%"></div>
+        </div>
+        <div class="load-count">${x.count}</div>
+        <div class="load-day">${esc(x.day)}</div>
+      </div>
+    `;
+  }).join("");
+
+  els.loadPanel.innerHTML = `<div class="load-grid">${bars}</div>`;
+}
+
 function renderTodayPanel() {
   const today = normalizeDate(new Date().toISOString());
   const active = state.events.filter((x) => !x.completed && x.dueAt);
@@ -627,6 +824,8 @@ function render() {
   updateResultStat(events);
   renderTodayPanel();
   renderStatsPanel();
+  renderRiskPanel();
+  renderLoadPanel();
 
   if (!events.length) {
     els.viewContent.innerHTML = '<div class="empty">没有匹配的事件，调整筛选条件试试。</div>';
@@ -759,12 +958,16 @@ function bindWorkspaceTabs() {
 els.addSubtaskBtn.addEventListener("click", () => {
   const text = String(els.subtaskInput.value || "").trim();
   if (!text) return;
+  const dueAt = normalizeSubtaskDueAt(els.subtaskDueAt?.value || "");
   state.formSubtasks.push({
     id: `sub_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
     text: text.slice(0, 120),
-    completed: false
+    completed: false,
+    dueAt,
+    order: state.formSubtasks.length + 1
   });
   els.subtaskInput.value = "";
+  if (els.subtaskDueAt) els.subtaskDueAt.value = "";
   renderSubtaskEditor();
 });
 
@@ -787,7 +990,33 @@ els.subtaskList.addEventListener("click", (event) => {
   if (target.dataset.action === "toggle-subtask") {
     state.formSubtasks = state.formSubtasks.map((x) => x.id === id ? { ...x, completed: !x.completed } : x);
   }
+  if (target.dataset.action === "move-subtask-up-local") {
+    const idx = state.formSubtasks.findIndex((x) => x.id === id);
+    if (idx > 0) {
+      const next = [...state.formSubtasks];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      state.formSubtasks = next;
+    }
+  }
+  if (target.dataset.action === "move-subtask-down-local") {
+    const idx = state.formSubtasks.findIndex((x) => x.id === id);
+    if (idx >= 0 && idx < state.formSubtasks.length - 1) {
+      const next = [...state.formSubtasks];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      state.formSubtasks = next;
+    }
+  }
+  state.formSubtasks = state.formSubtasks.map((x, index) => ({ ...x, order: index + 1 }));
   renderSubtaskEditor();
+});
+
+els.subtaskList.addEventListener("change", (event) => {
+  const target = event.target.closest("[data-action='set-subtask-due']");
+  if (!target) return;
+  const id = target.dataset.id;
+  if (!id) return;
+  const dueAt = normalizeSubtaskDueAt(target.value || "");
+  state.formSubtasks = state.formSubtasks.map((x) => (x.id === id ? { ...x, dueAt } : x));
 });
 
 els.form.addEventListener("submit", async (event) => {
@@ -807,7 +1036,15 @@ els.form.addEventListener("submit", async (event) => {
       priority: els.priority.value,
       dueAt,
       tags: parseTags(els.tags.value),
-      subtasks: state.formSubtasks,
+      subtasks: state.formSubtasks
+        .filter((x) => String(x?.text || "").trim())
+        .map((x, index) => ({
+          id: x.id || `sub_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
+          text: String(x.text || "").trim().slice(0, 120),
+          completed: Boolean(x.completed),
+          dueAt: normalizeSubtaskDueAt(x.dueAt),
+          order: index + 1
+        })),
       recurrence: parseRecurrence()
     };
 
@@ -942,6 +1179,22 @@ els.viewContent.addEventListener("click", async (event) => {
     await patchEventSubtasks(id, (subtasks) =>
       subtasks.filter((sub) => String(sub?.id) !== String(subId))
     );
+    return;
+  }
+
+  if (action === "move-subtask-up" || action === "move-subtask-down") {
+    if (!id) return;
+    const subId = target.dataset.subId;
+    if (!subId) return;
+    await patchEventSubtasks(id, (subtasks) => {
+      const list = getEventSubtasks({ subtasks }).map((x) => ({ ...x }));
+      const idx = list.findIndex((sub) => String(sub?.id) === String(subId));
+      if (idx < 0) return list;
+      const swapIdx = action === "move-subtask-up" ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= list.length) return list;
+      [list[idx], list[swapIdx]] = [list[swapIdx], list[idx]];
+      return list.map((sub, index) => ({ ...sub, order: index + 1 }));
+    });
     return;
   }
 

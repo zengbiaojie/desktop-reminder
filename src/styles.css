@@ -227,8 +227,13 @@ textarea { resize: vertical; }
 
 .subtask-actions {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.subtask-actions input[type="datetime-local"] {
+  min-width: 190px;
 }
 
 .subtask-list {
@@ -317,6 +322,106 @@ textarea { resize: vertical; }
   font-size: 12px;
 }
 .today-item small { color: var(--sub); }
+
+.overview-plus {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.risk-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.risk-item {
+  border: 1px solid var(--line);
+  border-left: 4px solid #7a8fa7;
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: #fcfdff;
+}
+.risk-item.urgent { border-left-color: var(--urgent); }
+.risk-item.important { border-left-color: var(--important); }
+.risk-item.daily { border-left-color: var(--daily); }
+.risk-item.overdue {
+  border-left-color: #ff0033;
+  background: #fff1f5;
+}
+
+.risk-main {
+  display: grid;
+  gap: 2px;
+}
+.risk-main strong {
+  font-size: 13px;
+  color: #203448;
+}
+.risk-main small {
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.risk-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.load-panel {
+  min-height: 160px;
+}
+
+.load-grid {
+  height: 160px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.load-col {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
+.load-bar-wrap {
+  height: 110px;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #dbe6f3;
+  background: #f5f9ff;
+  display: flex;
+  align-items: flex-end;
+  padding: 3px;
+}
+
+.load-bar {
+  width: 100%;
+  border-radius: 6px;
+  background: #6aa9ff;
+}
+.load-bar.warm { background: #f6b73d; }
+.load-bar.hot { background: #ef4444; }
+
+.load-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: #2f4761;
+}
+
+.load-day {
+  font-size: 11px;
+  color: var(--sub);
+}
 
 .view-header {
   display: flex;
@@ -433,6 +538,41 @@ textarea { resize: vertical; }
   border-radius: 8px;
   background: #ffffff;
   padding: 6px 8px;
+}
+
+.subtask-order {
+  flex: none !important;
+  min-width: 24px;
+  color: #5a728b;
+  font-weight: 700;
+}
+
+.subtask-due {
+  flex: none;
+  font-size: 12px;
+  color: #486581;
+  min-width: 136px;
+  text-align: right;
+}
+
+.subtask-inline-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+
+.subtask-inline-actions button {
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.subtask-due-input {
+  flex: none;
+  min-width: 190px;
+  max-width: 220px;
 }
 
 .subtask-line.done {
@@ -835,6 +975,7 @@ button.subtask-del-btn:active {
   .recurrence-grid { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
   .today-panel { grid-template-columns: 1fr; }
+  .overview-plus { grid-template-columns: 1fr; }
   .calendar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .toolbar input,
   .toolbar select,

@@ -126,6 +126,13 @@ function normalizeDueAt(value) {
   return d.toISOString();
 }
 
+function normalizeSubtaskDueAt(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString();
+}
+
 function normalizeTags(value) {
   const source = Array.isArray(value) ? value : String(value || "").split(",");
   const uniq = new Set();
@@ -140,18 +147,48 @@ function normalizeTags(value) {
 function normalizeSubtasks(value) {
   const source = Array.isArray(value) ? value : [];
   const out = [];
+  let idx = 0;
   for (const raw of source) {
     const text = typeof raw === "string" ? raw : raw?.text;
     const t = String(text || "").trim();
     if (!t) continue;
+    const orderRaw = Number(typeof raw === "object" ? raw?.order : NaN);
+    const order = Number.isFinite(orderRaw) ? Math.max(1, Math.round(orderRaw)) : idx + 1;
     out.push({
       id: typeof raw === "object" && raw?.id ? String(raw.id) : makeId("sub"),
       text: t.slice(0, 120),
-      completed: Boolean(typeof raw === "object" ? raw?.completed : false)
+      completed: Boolean(typeof raw === "object" ? raw?.completed : false),
+      dueAt: typeof raw === "object" ? normalizeSubtaskDueAt(raw?.dueAt) : "",
+      order,
+      __idx: idx
     });
+    idx += 1;
     if (out.length >= 50) break;
   }
-  return out;
+
+  out.sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
+    return a.__idx - b.__idx;
+  });
+
+  return out.map((sub, index) => ({
+    id: sub.id,
+    text: sub.text,
+    completed: sub.completed,
+    dueAt: sub.dueAt,
+    order: index + 1
+  }));
+}
+
+function cloneSubtasksForNext(subtasks, freq, interval) {
+  const source = normalizeSubtasks(subtasks);
+  return source.map((x, index) => ({
+    id: makeId("sub"),
+    text: x.text,
+    completed: false,
+    dueAt: x.dueAt ? addDuration(x.dueAt, freq, interval) : "",
+    order: index + 1
+  }));
 }
 
 function normalizeRecurrence(value, fallback = null) {
@@ -590,11 +627,7 @@ function maybeGenerateRecurringNext(state, prevEvent, nextEvent) {
     completed: false,
     completedAt: "",
     tags: [...(nextEvent.tags || [])],
-    subtasks: (nextEvent.subtasks || []).map((x) => ({
-      id: makeId("sub"),
-      text: x.text,
-      completed: false
-    })),
+    subtasks: cloneSubtasksForNext(nextEvent.subtasks || [], rec.freq, rec.interval),
     recurrence: {
       ...rec,
       enabled: true,
@@ -659,11 +692,7 @@ function spawnRecurringNextForOverdue(state, item, nowMs) {
     completed: false,
     completedAt: "",
     tags: [...(item.tags || [])],
-    subtasks: (item.subtasks || []).map((x) => ({
-      id: makeId("sub"),
-      text: x.text,
-      completed: false
-    })),
+    subtasks: cloneSubtasksForNext(item.subtasks || [], rec.freq, rec.interval),
     recurrence: {
       ...rec,
       enabled: true,

@@ -38,6 +38,21 @@
           </div>
           <div id="todayPanel" class="today-panel"></div>
         </section>
+
+        <section class="overview-plus">
+          <article class="panel">
+            <div class="today-head">
+              <h2>高风险任务</h2>
+            </div>
+            <div id="riskPanel" class="risk-panel"></div>
+          </article>
+          <article class="panel">
+            <div class="today-head">
+              <h2>未来 7 天负载</h2>
+            </div>
+            <div id="loadPanel" class="load-panel"></div>
+          </article>
+        </section>
       </section>
 
       <section id="pane-events" class="workspace-pane">
@@ -106,6 +121,7 @@
                 <span>子任务清单</span>
                 <div class="subtask-actions">
                   <input id="subtaskInput" maxlength="120" placeholder="输入子任务后点击添加" />
+                  <input id="subtaskDueAt" type="datetime-local" />
                   <button type="button" id="addSubtaskBtn" class="ghost">添加子任务</button>
                 </div>
               </div>
