@@ -9,6 +9,7 @@ let isQuitting = false;
 let reminderTimer = null;
 let bubbleDragTimer = null;
 let bubbleDragOffset = null;
+let bubbleDragSize = null;
 
 const dataDir = app.getPath("userData");
 const dataPath = path.join(dataDir, "events.json");
@@ -329,12 +330,18 @@ function createBubbleWindow() {
   bubbleWindow = new BrowserWindow({
     width,
     height,
+    minWidth: width,
+    minHeight: height,
+    maxWidth: width,
+    maxHeight: height,
+    useContentSize: true,
     x,
     y,
     frame: false,
+    thickFrame: false,
     transparent: true,
     resizable: false,
-    movable: true,
+    movable: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
@@ -350,6 +357,12 @@ function createBubbleWindow() {
   });
 
   bubbleWindow.setAlwaysOnTop(true, "screen-saver");
+  bubbleWindow.setMinimumSize(width, height);
+  bubbleWindow.setMaximumSize(width, height);
+  bubbleWindow.setResizable(false);
+  bubbleWindow.on("will-resize", (event) => {
+    event.preventDefault();
+  });
   bubbleWindow.loadFile(path.join(__dirname, "bubble.html"));
 
   bubbleWindow.on("close", (event) => {
@@ -375,6 +388,9 @@ function applyBubbleWindowSize(size) {
 
   const nextX = Math.min(Math.max(bounds.x, area.x), area.x + area.width - target);
   const nextY = Math.min(Math.max(bounds.y, area.y), area.y + area.height - target);
+  bubbleWindow.setMinimumSize(target, target);
+  bubbleWindow.setMaximumSize(target, target);
+  bubbleWindow.setResizable(false);
   bubbleWindow.setBounds({
     x: Math.round(nextX),
     y: Math.round(nextY),
@@ -395,6 +411,7 @@ function stopBubbleDrag() {
     bubbleDragTimer = null;
   }
   bubbleDragOffset = null;
+  bubbleDragSize = null;
 }
 
 function startBubbleDrag(startPoint) {
@@ -405,9 +422,18 @@ function startBubbleDrag(startPoint) {
   if (!Number.isFinite(startX) || !Number.isFinite(startY)) return false;
 
   const bounds = bubbleWindow.getBounds();
+  const currentSettings = readState().settings || {};
+  const targetSize = Math.max(minBubbleSize, Math.min(maxBubbleSize, Math.round(Number(currentSettings.bubbleSize) || defaultBubbleSize)));
+  bubbleWindow.setMinimumSize(targetSize, targetSize);
+  bubbleWindow.setMaximumSize(targetSize, targetSize);
+  bubbleWindow.setResizable(false);
   bubbleDragOffset = {
     x: startX - bounds.x,
     y: startY - bounds.y
+  };
+  bubbleDragSize = {
+    width: targetSize,
+    height: targetSize
   };
 
   if (bubbleDragTimer) {
@@ -420,10 +446,14 @@ function startBubbleDrag(startPoint) {
       return;
     }
     const cursor = screen.getCursorScreenPoint();
-    bubbleWindow.setPosition(
-      Math.round(cursor.x - bubbleDragOffset.x),
-      Math.round(cursor.y - bubbleDragOffset.y)
-    );
+    const width = Math.max(minBubbleSize, Math.min(maxBubbleSize, Math.round(Number(bubbleDragSize?.width) || defaultBubbleSize)));
+    const height = Math.max(minBubbleSize, Math.min(maxBubbleSize, Math.round(Number(bubbleDragSize?.height) || defaultBubbleSize)));
+    bubbleWindow.setBounds({
+      x: Math.round(cursor.x - bubbleDragOffset.x),
+      y: Math.round(cursor.y - bubbleDragOffset.y),
+      width,
+      height
+    });
   }, 8);
 
   return true;
