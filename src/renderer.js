@@ -2,6 +2,10 @@
   events: [],
   currentView: "list",
   formSubtasks: [],
+  expandedSubtasks: new Set(),
+  calendarDetailDate: "",
+  calendarYear: null,
+  calendarMonth: null,
   filters: {
     keyword: "",
     priority: "all",
@@ -81,6 +85,28 @@ const priorityLabel = {
 };
 
 const pad = (n) => String(n).padStart(2, "0");
+
+function ensureCalendarCursor() {
+  if (Number.isInteger(state.calendarYear) && Number.isInteger(state.calendarMonth)) return;
+  const now = new Date();
+  state.calendarYear = now.getFullYear();
+  state.calendarMonth = now.getMonth();
+}
+
+function shiftCalendarMonth(delta) {
+  ensureCalendarCursor();
+  const next = new Date(state.calendarYear, state.calendarMonth + delta, 1);
+  state.calendarYear = next.getFullYear();
+  state.calendarMonth = next.getMonth();
+  state.calendarDetailDate = "";
+}
+
+function resetCalendarMonth() {
+  const now = new Date();
+  state.calendarYear = now.getFullYear();
+  state.calendarMonth = now.getMonth();
+  state.calendarDetailDate = "";
+}
 
 function normalizeDate(dateLike) {
   if (!dateLike) return "";
@@ -181,18 +207,70 @@ function filteredEvents() {
 
 function subtaskProgress(item) {
   const subtasks = Array.isArray(item.subtasks) ? item.subtasks : [];
-  if (!subtasks.length) return "无子任务";
+  if (!subtasks.length) return "";
   const done = subtasks.filter((x) => x.completed).length;
   return `${done}/${subtasks.length}`;
 }
 
+function getEventSubtasks(item) {
+  const subtasks = Array.isArray(item.subtasks) ? item.subtasks : [];
+  return subtasks.filter((x) => String(x?.text || "").trim());
+}
+
+function renderSubtaskSection(item, compact = false) {
+  const subtasks = getEventSubtasks(item);
+  if (!subtasks.length) return "";
+
+  const expanded = state.expandedSubtasks.has(item.id);
+  const rows = subtasks.map((sub) => `
+    <div class="subtask-line ${sub.completed ? "done" : ""}">
+      <label class="subtask-check">
+        <input
+          type="checkbox"
+          data-action="toggle-subtask-status"
+          data-id="${esc(item.id)}"
+          data-sub-id="${esc(sub.id)}"
+          ${sub.completed ? "checked" : ""}
+        />
+        <span>${esc(sub.text || "")}</span>
+      </label>
+      <button
+        type="button"
+        class="danger ghost subtask-del-btn"
+        data-action="delete-subtask-item"
+        data-id="${esc(item.id)}"
+        data-sub-id="${esc(sub.id)}"
+      >删除</button>
+    </div>
+  `).join("");
+
+  return `
+    <button data-action="toggle-subtasks" data-id="${esc(item.id)}" class="ghost subtask-toggle-btn ${compact ? "compact" : ""}">
+      ${expanded ? "收起子任务" : "展开子任务"} (${esc(subtaskProgress(item))})
+    </button>
+    ${expanded ? `<div class="subtask-panel ${compact ? "compact" : ""}"><div class="subtask-list-view">${rows}</div></div>` : ""}
+  `;
+}
+
+async function patchEventSubtasks(eventId, updater) {
+  const item = state.events.find((x) => x.id === eventId);
+  if (!item) return;
+  const current = Array.isArray(item.subtasks) ? item.subtasks : [];
+  const nextSubtasks = updater(current).filter((x) => String(x?.text || "").trim());
+  await window.reminderApi.updateEvent({
+    id: eventId,
+    subtasks: nextSubtasks
+  });
+  state.expandedSubtasks.add(eventId);
+  await refresh();
+}
 function updateResultStat(visibleEvents) {
   els.resultStat.textContent = `当前显示 ${visibleEvents.length} 条`;
 }
 
 function renderSubtaskEditor() {
   if (!state.formSubtasks.length) {
-    els.subtaskList.innerHTML = '<div class="today-item"><small>暂无子任务</small></div>';
+    els.subtaskList.innerHTML = "";
     return;
   }
 
@@ -261,15 +339,16 @@ function renderList(events) {
     <article class="card ${esc(item.priority)} ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
       <div class="card-main">
         <h3>${esc(item.title)}</h3>
-        <p>${esc(item.note || "无备注")}</p>
+        ${item.note ? `<p>${esc(item.note)}</p>` : ""}
         <div class="meta">
           <span class="tag">${priorityLabel[item.priority] || "日常"}</span>
           <span class="tag ${isOverdue(item) ? "due-overdue" : ""}">DDL: ${esc(fmtDateTime(item.dueAt))}</span>
           <span class="tag ${isOverdue(item) ? "status-overdue" : ""}">状态: ${getEventStatusLabel(item)}</span>
-          <span class="tag">子任务: ${esc(subtaskProgress(item))}</span>
+          ${subtaskProgress(item) ? `<span class="tag">子任务: ${esc(subtaskProgress(item))}</span>` : ""}
           <span class="tag">重复: ${esc(recurrenceLabel(item.recurrence))}</span>
           ${(item.tags || []).map((t) => `<span class="tag-soft">#${esc(t)}</span>`).join("")}
         </div>
+        ${renderSubtaskSection(item)}
       </div>
       <div class="row-actions">
         <button data-action="toggle" data-id="${esc(item.id)}" class="ghost">${item.completed ? "设为未完成" : "设为完成"}</button>
@@ -282,31 +361,75 @@ function renderList(events) {
 }
 
 function renderTable(events) {
-  const rows = events.map((item) => `
-    <tr class="tbl-row ${esc(item.priority)} ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
-      <td>${esc(item.title)}</td>
-      <td>${priorityLabel[item.priority] || "日常"}</td>
-      <td>${esc((item.tags || []).join(", ") || "-")}</td>
-      <td>${esc(subtaskProgress(item))}</td>
-      <td>${esc(recurrenceLabel(item.recurrence))}</td>
-      <td><span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></td>
-      <td><span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${getEventStatusLabel(item)}</span></td>
-      <td>
-        <button data-action="toggle" data-id="${esc(item.id)}" class="ghost">切换完成</button>
-        <button data-action="edit" data-id="${esc(item.id)}" class="ghost">编辑</button>
-        <button data-action="delete" data-id="${esc(item.id)}" class="danger">删除</button>
-      </td>
-    </tr>
-  `).join("");
+  const rows = events.map((item) => {
+    const subtasks = getEventSubtasks(item);
+    const expanded = state.expandedSubtasks.has(item.id);
+
+    const hasSubtasks = subtasks.length > 0;
+    const subRows = expanded
+      ? (subtasks.length
+        ? subtasks.map((sub) => `
+            <tr class="tbl-subtask-row">
+              <td colspan="7">
+                <div class="tbl-subtask-inner ${sub.completed ? "done" : ""}">
+                  <label class="tbl-subtask-check">
+                    <input
+                      type="checkbox"
+                      data-action="toggle-subtask-status"
+                      data-id="${esc(item.id)}"
+                      data-sub-id="${esc(sub.id)}"
+                      ${sub.completed ? "checked" : ""}
+                    />
+                    <span>${esc(sub.text || "")}</span>
+                  </label>
+                  <button
+                    type="button"
+                    class="danger ghost subtask-del-btn"
+                    data-action="delete-subtask-item"
+                    data-id="${esc(item.id)}"
+                    data-sub-id="${esc(sub.id)}"
+                  >删除</button>
+                </div>
+              </td>
+            </tr>
+          `).join("")
+        : "")
+      : "";
+
+    return `
+      <tr class="tbl-row ${esc(item.priority)} ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
+        <td>
+          <div class="tbl-title-wrap">
+            ${hasSubtasks
+              ? `<button data-action="toggle-subtasks" data-id="${esc(item.id)}" class="ghost tbl-expand-btn">${expanded ? "-" : "+"}</button>`
+              : `<span class="tbl-expand-spacer"></span>`
+            }
+            <span class="tbl-title-text">${esc(item.title)}</span>
+          </div>
+          ${subtaskProgress(item) ? `<div class="tbl-sub-meta">子任务: ${esc(subtaskProgress(item))}</div>` : ""}
+        </td>
+        <td>${priorityLabel[item.priority] || "日常"}</td>
+        <td>${esc((item.tags || []).join(", ") || "-")}</td>
+        <td>${esc(recurrenceLabel(item.recurrence))}</td>
+        <td><span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></td>
+        <td><span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${getEventStatusLabel(item)}</span></td>
+        <td>
+          <button data-action="toggle" data-id="${esc(item.id)}" class="ghost">切换完成</button>
+          <button data-action="edit" data-id="${esc(item.id)}" class="ghost">编辑</button>
+          <button data-action="delete" data-id="${esc(item.id)}" class="danger">删除</button>
+        </td>
+      </tr>
+      ${subRows}
+    `;
+  }).join("");
 
   return `
     <table class="table">
       <thead>
         <tr>
           <th>标题</th>
-          <th>粒度</th>
+          <th>优先级</th>
           <th>标签</th>
-          <th>子任务</th>
           <th>重复</th>
           <th>DDL</th>
           <th>状态</th>
@@ -321,15 +444,14 @@ function renderTable(events) {
 function renderTimeline(events) {
   const html = events.map((item) => `
     <div class="tl-item ${esc(item.priority)} ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
-      <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
-        <strong>${esc(item.title)}</strong>
-      </div>
-      <div>${priorityLabel[item.priority] || "日常"} | DDL: <span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></div>
-      <div>状态：<span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${getEventStatusLabel(item)}</span></div>
-      <div>标签：${esc((item.tags || []).join(", ") || "无")}</div>
-      <div>子任务进度：${esc(subtaskProgress(item))}</div>
-      <div>重复：${esc(recurrenceLabel(item.recurrence))}</div>
-      <div>${esc(item.note || "无备注")}</div>
+      <div class="tl-title">${esc(item.title)}</div>
+      <div class="tl-meta">${priorityLabel[item.priority] || "日常"} | DDL: <span class="${isOverdue(item) ? "due-overdue tag" : ""}">${esc(fmtDateTime(item.dueAt))}</span></div>
+      <div class="tl-meta">状态：<span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${getEventStatusLabel(item)}</span></div>
+      <div class="tl-meta">标签：${esc((item.tags || []).join(", ") || "无")}</div>
+      ${subtaskProgress(item) ? `<div class="tl-meta">子任务进度：${esc(subtaskProgress(item))}</div>` : ""}
+      ${renderSubtaskSection(item)}
+      <div class="tl-meta">重复：${esc(recurrenceLabel(item.recurrence))}</div>
+      ${item.note ? `<div class="tl-note">${esc(item.note)}</div>` : ""}
       <div class="row-actions" style="margin-top:6px;">
         <button data-action="toggle" data-id="${esc(item.id)}" class="ghost">${item.completed ? "设为未完成" : "设为完成"}</button>
         <button data-action="edit" data-id="${esc(item.id)}" class="ghost">编辑</button>
@@ -342,6 +464,7 @@ function renderTimeline(events) {
 }
 
 function renderCalendar(events) {
+  ensureCalendarCursor();
   const map = new Map();
   for (const item of events) {
     const key = normalizeDate(item.dueAt);
@@ -351,8 +474,9 @@ function renderCalendar(events) {
   }
 
   const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
+  const todayKey = normalizeDate(now.toISOString());
+  const y = state.calendarYear;
+  const m = state.calendarMonth;
   const first = new Date(y, m, 1);
   const last = new Date(y, m + 1, 0);
 
@@ -366,20 +490,89 @@ function renderCalendar(events) {
     const items = map.get(key) || [];
     const list = items
       .slice(0, 3)
-      .map((it) => `<div class="dot-item ${it.completed ? "completed" : ""} ${isOverdue(it) ? "overdue" : ""}">${esc(it.title)}</div>`)
+      .map((it) => `
+        <div class="dot-item ${it.completed ? "completed" : ""} ${isOverdue(it) ? "overdue" : ""}">
+          <span class="dot-main">${esc(it.title)}</span>
+          <span class="dot-sub">${esc(subtaskProgress(it))}</span>
+        </div>
+      `)
       .join("");
     const more = items.length > 3 ? `<div class="dot-item">+${items.length - 3} 更多</div>` : "";
-    cells.push(`<div class="day"><div class="day-head">${day} 日</div>${list}${more}</div>`);
+    const isSelected = state.calendarDetailDate === key;
+    const clickable = items.length > 0 ? "clickable" : "";
+
+    cells.push(`
+      <div class="day ${key === todayKey ? "today" : ""} ${isSelected ? "selected" : ""} ${clickable}"
+           data-action="${items.length > 0 ? "open-day-detail" : ""}"
+           data-date="${key}">
+        <div class="day-head">${day} 日${key === todayKey ? " · 今天" : ""}</div>
+        ${list}${more}
+      </div>
+    `);
   }
 
-  return `<div class="calendar">${cells.join("")}</div>`;
+  const detailHtml = renderCalendarDayDetail(events, state.calendarDetailDate);
+  return `
+    <div class="calendar-nav">
+      <button class="ghost" data-action="calendar-prev-month">上个月</button>
+      <div class="calendar-nav-title">${y}年${m + 1}月</div>
+      <button class="ghost" data-action="calendar-next-month">下个月</button>
+      <button class="ghost" data-action="calendar-current-month">本月</button>
+    </div>
+    <div class="calendar">${cells.join("")}</div>
+    ${detailHtml}
+  `;
 }
 
+function renderCalendarDayDetail(events, dateKey) {
+  if (!dateKey) return "";
+  const dayEvents = sortedEvents(events.filter((item) => normalizeDate(item.dueAt) === dateKey));
+  const dateText = esc(dateKey);
+  if (!dayEvents.length) {
+    return `
+      <section class="calendar-detail panel">
+        <div class="calendar-detail-head">
+          <h3>${dateText} 详情</h3>
+          <button class="ghost" data-action="close-day-detail">关闭</button>
+        </div>
+        <div class="empty">当天没有可展示的事件。</div>
+      </section>
+    `;
+  }
+
+  const list = dayEvents.map((item) => `
+    <article class="calendar-detail-item ${item.completed ? "completed" : ""} ${isOverdue(item) ? "overdue" : ""}">
+      <div class="calendar-detail-title">${esc(item.title)}</div>
+      <div class="calendar-detail-meta">
+        <span class="tag">${priorityLabel[item.priority] || "日常"}</span>
+        <span class="tag ${isOverdue(item) ? "due-overdue" : ""}">DDL: ${esc(fmtDateTime(item.dueAt))}</span>
+        <span class="tag ${isOverdue(item) ? "status-overdue" : ""}">${getEventStatusLabel(item)}</span>
+        ${subtaskProgress(item) ? `<span class="tag">子任务: ${esc(subtaskProgress(item))}</span>` : ""}
+      </div>
+      ${item.note ? `<div class="calendar-detail-note">${esc(item.note)}</div>` : ""}
+      <div class="row-actions">
+        <button data-action="toggle" data-id="${esc(item.id)}" class="ghost">${item.completed ? "设为未完成" : "设为完成"}</button>
+        <button data-action="edit" data-id="${esc(item.id)}" class="ghost">编辑</button>
+        <button data-action="delete" data-id="${esc(item.id)}" class="danger">删除</button>
+      </div>
+    </article>
+  `).join("");
+
+  return `
+    <section class="calendar-detail panel">
+      <div class="calendar-detail-head">
+        <h3>${dateText} 详情 (${dayEvents.length})</h3>
+        <button class="ghost" data-action="close-day-detail">关闭</button>
+      </div>
+      <div class="calendar-detail-list">${list}</div>
+    </section>
+  `;
+}
 function buildTodayList(items, emptyText) {
   if (!items.length) return `<div class="today-item"><small>${emptyText}</small></div>`;
   return items.slice(0, 6).map((item) => `
     <div class="today-item">
-      <div>${esc(item.title)} (${esc(subtaskProgress(item))})</div>
+      <div>${esc(item.title)}${subtaskProgress(item) ? ` (${esc(subtaskProgress(item))})` : ""}</div>
       <small>${esc(fmtDateTime(item.dueAt))}</small>
     </div>
   `).join("");
@@ -450,6 +643,8 @@ function render() {
 
 async function refresh() {
   state.events = await window.reminderApi.listEvents();
+  const ids = new Set(state.events.map((x) => x.id));
+  state.expandedSubtasks = new Set([...state.expandedSubtasks].filter((id) => ids.has(id)));
   render();
 }
 
@@ -675,6 +870,71 @@ els.viewContent.addEventListener("click", async (event) => {
 
   const action = target.dataset.action;
   const id = target.dataset.id;
+  const date = target.dataset.date;
+
+  if (action === "calendar-prev-month") {
+    shiftCalendarMonth(-1);
+    render();
+    return;
+  }
+
+  if (action === "calendar-next-month") {
+    shiftCalendarMonth(1);
+    render();
+    return;
+  }
+
+  if (action === "calendar-current-month") {
+    resetCalendarMonth();
+    render();
+    return;
+  }
+
+  if (action === "open-day-detail") {
+    if (!date) return;
+    state.calendarDetailDate = date;
+    render();
+    return;
+  }
+
+  if (action === "close-day-detail") {
+    state.calendarDetailDate = "";
+    render();
+    return;
+  }
+
+  if (action === "toggle-subtasks") {
+    if (!id) return;
+    if (state.expandedSubtasks.has(id)) state.expandedSubtasks.delete(id);
+    else state.expandedSubtasks.add(id);
+    render();
+    return;
+  }
+
+  if (action === "toggle-subtask-status") {
+    if (!id) return;
+    const subId = target.dataset.subId;
+    if (!subId) return;
+    await patchEventSubtasks(id, (subtasks) =>
+      subtasks.map((sub) =>
+        String(sub?.id) === String(subId)
+          ? { ...sub, completed: !Boolean(sub.completed) }
+          : sub
+      )
+    );
+    return;
+  }
+
+  if (action === "delete-subtask-item") {
+    if (!id) return;
+    const subId = target.dataset.subId;
+    if (!subId) return;
+    await patchEventSubtasks(id, (subtasks) =>
+      subtasks.filter((sub) => String(sub?.id) !== String(subId))
+    );
+    return;
+  }
+
   if (!id) return;
 
   if (action === "toggle") {
@@ -684,7 +944,7 @@ els.viewContent.addEventListener("click", async (event) => {
   }
 
   if (action === "delete") {
-    const ok = confirm("确定删除该事件吗？");
+    const ok = confirm("确认删除该事件？");
     if (!ok) return;
     await window.reminderApi.deleteEvent(id);
     if (els.id.value === id) resetForm();
@@ -748,7 +1008,35 @@ async function boot() {
   await refresh();
 }
 
-boot();
+boot().catch((err) => {
+  const message = err?.message || String(err);
+  console.error("boot failed:", err);
+  document.body.insertAdjacentHTML(
+    "afterbegin",
+    `<div class="inapp-reminder" style="display:block;background:#fff5f5;border-color:#ef4444;">
+      <strong>初始化失败</strong><br>${esc(message)}
+    </div>`
+  );
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

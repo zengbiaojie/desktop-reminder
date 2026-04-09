@@ -2,3 +2,7 @@
 input.json
 result.json
 sentry_skill_log/
+docs
+
+.claude
+dist

@@ -5,7 +5,11 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "icon:generate": "png-to-ico -- ddl.png > assets/tray.ico"
+    "icon:generate": "png-to-ico -- ddl.png > assets/tray.ico",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable",
+    "build:dir": "electron-builder --win --dir",
+    "build:all": "electron-builder --win nsis portable"
   },
   "keywords": [
     "reminder",
@@ -16,6 +20,42 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^37.1.0",
+    "electron-builder": "^26.8.1",
     "png-to-ico": "^3.0.1"
+  },
+  "build": {
+    "appId": "com.desktopreminder.app",
+    "productName": "Desktop Reminder",
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "ddl.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/app.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowElevation": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

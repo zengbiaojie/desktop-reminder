@@ -34,11 +34,26 @@ const defaultState = {
 
 const allowedPriorities = new Set(["urgent", "important", "daily"]);
 const allowedRecurrenceFreq = new Set(["daily", "weekly", "monthly"]);
-const iconCandidates = [
-  path.join(__dirname, "..", "assets", "tray.ico"),
-  path.join(__dirname, "..", "assets", "tray.png"),
-  path.join(__dirname, "..", "ddl.png")
-];
+
+function getIconCandidates() {
+  const roots = [
+    path.join(__dirname, ".."),
+    process.resourcesPath
+  ];
+  const names = [
+    path.join("assets", "app.ico"),
+    path.join("assets", "tray.ico"),
+    path.join("assets", "tray.png"),
+    "ddl.png"
+  ];
+  const out = [];
+  for (const root of roots) {
+    for (const name of names) {
+      out.push(path.join(root, name));
+    }
+  }
+  return out;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -226,7 +241,7 @@ function writeState(state) {
 }
 
 function getPreferredNativeIcon() {
-  for (const iconPath of iconCandidates) {
+  for (const iconPath of getIconCandidates()) {
     const loaded = nativeImage.createFromPath(iconPath);
     if (!loaded.isEmpty()) return loaded;
   }
