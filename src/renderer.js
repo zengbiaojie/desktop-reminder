@@ -15,6 +15,7 @@
   settings: {
     autoStart: true,
     alwaysOnTop: true,
+    bubbleSize: 46,
     reminders: {
       enabled: true,
       rules: {
@@ -68,6 +69,8 @@ const els = {
   filterTag: document.getElementById("filterTag"),
   autoStart: document.getElementById("autoStart"),
   alwaysOnTop: document.getElementById("alwaysOnTop"),
+  bubbleSize: document.getElementById("bubbleSize"),
+  bubbleSizeValue: document.getElementById("bubbleSizeValue"),
   emptyTemplate: document.getElementById("emptyTemplate")
 };
 
@@ -707,6 +710,13 @@ function applyReminderSettings(settings) {
   els.reminderOverdue.checked = rules.overdue !== false;
 }
 
+function applyBubbleSizeSettings(settings) {
+  const raw = Number(settings?.bubbleSize);
+  const size = Number.isFinite(raw) ? Math.max(32, Math.min(80, Math.round(raw))) : 46;
+  if (els.bubbleSize) els.bubbleSize.value = String(size);
+  if (els.bubbleSizeValue) els.bubbleSizeValue.textContent = `${size}px`;
+}
+
 function showInAppReminder(payload) {
   const title = payload?.title || "提醒";
   const body = payload?.body || "";
@@ -994,12 +1004,26 @@ els.alwaysOnTop.addEventListener("change", async () => {
   state.settings = await window.reminderApi.updateSettings({ alwaysOnTop: els.alwaysOnTop.checked });
 });
 
+if (els.bubbleSize) {
+  els.bubbleSize.addEventListener("input", () => {
+    const size = Number(els.bubbleSize.value) || 46;
+    if (els.bubbleSizeValue) els.bubbleSizeValue.textContent = `${size}px`;
+  });
+
+  els.bubbleSize.addEventListener("change", async () => {
+    const size = Number(els.bubbleSize.value) || 46;
+    state.settings = await window.reminderApi.updateSettings({ bubbleSize: size });
+    applyBubbleSizeSettings(state.settings);
+  });
+}
+
 async function boot() {
   const settings = await window.reminderApi.getSettings();
   state.settings = settings;
   els.autoStart.checked = Boolean(settings.autoStart);
   els.alwaysOnTop.checked = Boolean(settings.alwaysOnTop);
   applyReminderSettings(settings);
+  applyBubbleSizeSettings(settings);
   bindFilterEvents();
   bindReminderEvents();
   bindWorkspaceTabs();

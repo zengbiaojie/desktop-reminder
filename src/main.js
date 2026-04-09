@@ -19,11 +19,15 @@ const defaultReminderRules = {
   tenMin: true,
   overdue: true
 };
+const minBubbleSize = 32;
+const maxBubbleSize = 80;
+const defaultBubbleSize = 46;
 
 const defaultState = {
   settings: {
     autoStart: true,
     alwaysOnTop: true,
+    bubbleSize: defaultBubbleSize,
     reminders: {
       enabled: true,
       rules: { ...defaultReminderRules }
@@ -74,9 +78,14 @@ function ensureDataFile() {
 
 function normalizeSettings(input) {
   const reminders = input?.reminders || {};
+  const bubbleSizeRaw = Number(input?.bubbleSize);
+  const bubbleSize = Number.isFinite(bubbleSizeRaw)
+    ? Math.max(minBubbleSize, Math.min(maxBubbleSize, Math.round(bubbleSizeRaw)))
+    : defaultBubbleSize;
   return {
     autoStart: input?.autoStart !== false,
     alwaysOnTop: input?.alwaysOnTop !== false,
+    bubbleSize,
     reminders: {
       enabled: reminders.enabled !== false,
       rules: {
@@ -272,9 +281,11 @@ function applyAutoStart(enabled) {
 function createBubbleWindow() {
   if (bubbleWindow && !bubbleWindow.isDestroyed()) return bubbleWindow;
 
+  const settings = readState().settings || {};
+  const bubbleSize = Number(settings.bubbleSize) || defaultBubbleSize;
   const area = screen.getPrimaryDisplay().workArea;
-  const width = 72;
-  const height = 72;
+  const width = bubbleSize;
+  const height = bubbleSize;
   const x = Math.max(area.x, area.x + area.width - width - 20);
   const y = Math.max(area.y, area.y + area.height - height - 90);
 
@@ -316,6 +327,23 @@ function createBubbleWindow() {
 function showBubbleWindow() {
   const win = createBubbleWindow();
   win.show();
+}
+
+function applyBubbleWindowSize(size) {
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  const target = Math.max(minBubbleSize, Math.min(maxBubbleSize, Math.round(Number(size) || defaultBubbleSize)));
+  const bounds = bubbleWindow.getBounds();
+  const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y });
+  const area = display.workArea;
+
+  const nextX = Math.min(Math.max(bounds.x, area.x), area.x + area.width - target);
+  const nextY = Math.min(Math.max(bounds.y, area.y), area.y + area.height - target);
+  bubbleWindow.setBounds({
+    x: Math.round(nextX),
+    y: Math.round(nextY),
+    width: target,
+    height: target
+  });
 }
 
 function hideBubbleWindow() {
@@ -437,7 +465,7 @@ function createWindow() {
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
     event.preventDefault();
-    hideBubbleWindow();
+    showBubbleWindow();
     mainWindow.hide();
   });
 
@@ -825,9 +853,9 @@ ipcMain.handle("settings:get", () => readState().settings);
 ipcMain.handle("settings:update", (_, patch) => {
   const state = readState();
   const prev = state.settings;
-
-  const nextReminders = normalizeSettings({
+  const merged = {
     ...prev,
+    ...(patch || {}),
     reminders: {
       ...(prev.reminders || {}),
       ...(patch?.reminders || {}),
@@ -836,13 +864,8 @@ ipcMain.handle("settings:update", (_, patch) => {
         ...(patch?.reminders?.rules || {})
       }
     }
-  }).reminders;
-
-  state.settings = {
-    ...prev,
-    ...(patch || {}),
-    reminders: nextReminders
   };
+  state.settings = normalizeSettings(merged);
 
   writeState(state);
 
@@ -851,6 +874,9 @@ ipcMain.handle("settings:update", (_, patch) => {
   }
   if (Object.prototype.hasOwnProperty.call(patch || {}, "alwaysOnTop") && mainWindow) {
     mainWindow.setAlwaysOnTop(Boolean(state.settings.alwaysOnTop), "screen-saver");
+  }
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "bubbleSize")) {
+    applyBubbleWindowSize(state.settings.bubbleSize);
   }
 
   return state.settings;
