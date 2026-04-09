@@ -981,6 +981,7 @@ els.subtaskInput.addEventListener("keydown", (event) => {
 els.subtaskList.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
+  if (target.dataset.action === "set-subtask-due") return;
   const id = target.dataset.id;
   if (!id) return;
 
