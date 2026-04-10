@@ -16,6 +16,7 @@
     autoStart: true,
     alwaysOnTop: true,
     bubbleSize: 46,
+    bubbleBlinkSeconds: 0,
     reminders: {
       enabled: true,
       rules: {
@@ -74,6 +75,7 @@ const els = {
   alwaysOnTop: document.getElementById("alwaysOnTop"),
   bubbleSize: document.getElementById("bubbleSize"),
   bubbleSizeValue: document.getElementById("bubbleSizeValue"),
+  bubbleBlinkSeconds: document.getElementById("bubbleBlinkSeconds"),
   emptyTemplate: document.getElementById("emptyTemplate")
 };
 
@@ -916,6 +918,13 @@ function applyBubbleSizeSettings(settings) {
   if (els.bubbleSizeValue) els.bubbleSizeValue.textContent = `${size}px`;
 }
 
+function applyBubbleBlinkSettings(settings) {
+  if (!els.bubbleBlinkSeconds) return;
+  const raw = Number(settings?.bubbleBlinkSeconds);
+  const seconds = Number.isFinite(raw) ? Math.max(0, Math.min(3600, Math.round(raw))) : 0;
+  els.bubbleBlinkSeconds.value = String(seconds);
+}
+
 function showInAppReminder(payload) {
   const title = payload?.title || "提醒";
   const body = payload?.body || "";
@@ -1271,6 +1280,15 @@ if (els.bubbleSize) {
   });
 }
 
+if (els.bubbleBlinkSeconds) {
+  els.bubbleBlinkSeconds.addEventListener("change", async () => {
+    const raw = Number(els.bubbleBlinkSeconds.value);
+    const seconds = Number.isFinite(raw) ? Math.max(0, Math.min(3600, Math.round(raw))) : 0;
+    state.settings = await window.reminderApi.updateSettings({ bubbleBlinkSeconds: seconds });
+    applyBubbleBlinkSettings(state.settings);
+  });
+}
+
 async function boot() {
   const settings = await window.reminderApi.getSettings();
   state.settings = settings;
@@ -1278,6 +1296,7 @@ async function boot() {
   els.alwaysOnTop.checked = Boolean(settings.alwaysOnTop);
   applyReminderSettings(settings);
   applyBubbleSizeSettings(settings);
+  applyBubbleBlinkSettings(settings);
   bindFilterEvents();
   bindReminderEvents();
   bindWorkspaceTabs();

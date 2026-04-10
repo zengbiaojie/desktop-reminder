@@ -9,6 +9,41 @@ const dragState = {
 };
 
 let countTimer = null;
+let blinkTimer = null;
+let blinkResetTimer = null;
+let unsubscribeSettings = null;
+
+function normalizeBlinkSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(3600, Math.round(n)));
+}
+
+function triggerBlink() {
+  if (!shell) return;
+  shell.classList.remove("blinking");
+  // Force reflow so repeat toggles can retrigger animation.
+  // eslint-disable-next-line no-unused-expressions
+  shell.offsetWidth;
+  shell.classList.add("blinking");
+  if (blinkResetTimer) clearTimeout(blinkResetTimer);
+  blinkResetTimer = setTimeout(() => {
+    shell.classList.remove("blinking");
+  }, 900);
+}
+
+function applyBlinkSettings(settings) {
+  const seconds = normalizeBlinkSeconds(settings?.bubbleBlinkSeconds);
+  if (blinkTimer) {
+    clearInterval(blinkTimer);
+    blinkTimer = null;
+  }
+  if (seconds <= 0) return;
+  blinkTimer = setInterval(() => {
+    if (dragState.dragging) return;
+    triggerBlink();
+  }, seconds * 1000);
+}
 
 async function refreshUrgentCount() {
   try {
@@ -64,6 +99,15 @@ shell?.addEventListener("dragstart", (event) => {
 window.addEventListener("load", async () => {
   await refreshUrgentCount();
   countTimer = setInterval(refreshUrgentCount, 5000);
+  try {
+    const settings = await window.bubbleApi.getSettings();
+    applyBlinkSettings(settings || {});
+  } catch {
+    applyBlinkSettings({ bubbleBlinkSeconds: 0 });
+  }
+  unsubscribeSettings = window.bubbleApi.onSettings((payload) => {
+    applyBlinkSettings(payload || {});
+  });
 });
 
 window.addEventListener("beforeunload", async () => {
@@ -74,5 +118,17 @@ window.addEventListener("beforeunload", async () => {
   if (countTimer) {
     clearInterval(countTimer);
     countTimer = null;
+  }
+  if (blinkTimer) {
+    clearInterval(blinkTimer);
+    blinkTimer = null;
+  }
+  if (blinkResetTimer) {
+    clearTimeout(blinkResetTimer);
+    blinkResetTimer = null;
+  }
+  if (typeof unsubscribeSettings === "function") {
+    unsubscribeSettings();
+    unsubscribeSettings = null;
   }
 });

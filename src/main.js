@@ -23,12 +23,16 @@ const defaultReminderRules = {
 const minBubbleSize = 32;
 const maxBubbleSize = 80;
 const defaultBubbleSize = 46;
+const minBubbleBlinkSeconds = 0;
+const maxBubbleBlinkSeconds = 3600;
+const defaultBubbleBlinkSeconds = 0;
 
 const defaultState = {
   settings: {
     autoStart: true,
     alwaysOnTop: true,
     bubbleSize: defaultBubbleSize,
+    bubbleBlinkSeconds: defaultBubbleBlinkSeconds,
     reminders: {
       enabled: true,
       rules: { ...defaultReminderRules }
@@ -83,10 +87,15 @@ function normalizeSettings(input) {
   const bubbleSize = Number.isFinite(bubbleSizeRaw)
     ? Math.max(minBubbleSize, Math.min(maxBubbleSize, Math.round(bubbleSizeRaw)))
     : defaultBubbleSize;
+  const bubbleBlinkRaw = Number(input?.bubbleBlinkSeconds);
+  const bubbleBlinkSeconds = Number.isFinite(bubbleBlinkRaw)
+    ? Math.max(minBubbleBlinkSeconds, Math.min(maxBubbleBlinkSeconds, Math.round(bubbleBlinkRaw)))
+    : defaultBubbleBlinkSeconds;
   return {
     autoStart: input?.autoStart !== false,
     alwaysOnTop: input?.alwaysOnTop !== false,
     bubbleSize,
+    bubbleBlinkSeconds,
     reminders: {
       enabled: reminders.enabled !== false,
       rules: {
@@ -377,6 +386,17 @@ function createBubbleWindow() {
 function showBubbleWindow() {
   const win = createBubbleWindow();
   win.show();
+}
+
+function syncBubbleSettingsToRenderer(settings) {
+  if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
+  try {
+    bubbleWindow.webContents.send("bubble:settings", {
+      bubbleBlinkSeconds: Number(settings?.bubbleBlinkSeconds) || 0
+    });
+  } catch {
+    // ignore renderer sync errors
+  }
 }
 
 function applyBubbleWindowSize(size) {
@@ -936,6 +956,9 @@ ipcMain.handle("settings:update", (_, patch) => {
   }
   if (Object.prototype.hasOwnProperty.call(patch || {}, "bubbleSize")) {
     applyBubbleWindowSize(state.settings.bubbleSize);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "bubbleBlinkSeconds")) {
+    syncBubbleSettingsToRenderer(state.settings);
   }
 
   return state.settings;
