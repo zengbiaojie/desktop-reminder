@@ -12,6 +12,7 @@ let countTimer = null;
 let blinkTimer = null;
 let blinkResetTimer = null;
 let unsubscribeSettings = null;
+let centerHintEnabled = true;
 
 function normalizeBlinkSeconds(value) {
   const n = Number(value);
@@ -30,10 +31,14 @@ function triggerBlink() {
   blinkResetTimer = setTimeout(() => {
     shell.classList.remove("blinking");
   }, 900);
+  if (centerHintEnabled) {
+    window.bubbleApi.showCenterHint("请检查一下你的事件安排").catch(() => {});
+  }
 }
 
 function applyBlinkSettings(settings) {
   const seconds = normalizeBlinkSeconds(settings?.bubbleBlinkSeconds);
+  centerHintEnabled = settings?.bubbleCenterHintEnabled !== false;
   if (blinkTimer) {
     clearInterval(blinkTimer);
     blinkTimer = null;

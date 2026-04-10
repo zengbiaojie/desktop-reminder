@@ -4,12 +4,14 @@ const fs = require("fs");
 
 let mainWindow = null;
 let bubbleWindow = null;
+let centerHintWindow = null;
 let tray = null;
 let isQuitting = false;
 let reminderTimer = null;
 let bubbleDragTimer = null;
 let bubbleDragOffset = null;
 let bubbleDragSize = null;
+let centerHintHideTimer = null;
 
 const dataDir = app.getPath("userData");
 const dataPath = path.join(dataDir, "events.json");
@@ -26,6 +28,7 @@ const defaultBubbleSize = 46;
 const minBubbleBlinkSeconds = 0;
 const maxBubbleBlinkSeconds = 3600;
 const defaultBubbleBlinkSeconds = 0;
+const defaultBubbleCenterHintEnabled = true;
 
 const defaultState = {
   settings: {
@@ -33,6 +36,7 @@ const defaultState = {
     alwaysOnTop: true,
     bubbleSize: defaultBubbleSize,
     bubbleBlinkSeconds: defaultBubbleBlinkSeconds,
+    bubbleCenterHintEnabled: defaultBubbleCenterHintEnabled,
     reminders: {
       enabled: true,
       rules: { ...defaultReminderRules }
@@ -91,11 +95,13 @@ function normalizeSettings(input) {
   const bubbleBlinkSeconds = Number.isFinite(bubbleBlinkRaw)
     ? Math.max(minBubbleBlinkSeconds, Math.min(maxBubbleBlinkSeconds, Math.round(bubbleBlinkRaw)))
     : defaultBubbleBlinkSeconds;
+  const bubbleCenterHintEnabled = input?.bubbleCenterHintEnabled !== false;
   return {
     autoStart: input?.autoStart !== false,
     alwaysOnTop: input?.alwaysOnTop !== false,
     bubbleSize,
     bubbleBlinkSeconds,
+    bubbleCenterHintEnabled,
     reminders: {
       enabled: reminders.enabled !== false,
       rules: {
@@ -392,11 +398,83 @@ function syncBubbleSettingsToRenderer(settings) {
   if (!bubbleWindow || bubbleWindow.isDestroyed()) return;
   try {
     bubbleWindow.webContents.send("bubble:settings", {
-      bubbleBlinkSeconds: Number(settings?.bubbleBlinkSeconds) || 0
+      bubbleBlinkSeconds: Number(settings?.bubbleBlinkSeconds) || 0,
+      bubbleCenterHintEnabled: settings?.bubbleCenterHintEnabled !== false
     });
   } catch {
     // ignore renderer sync errors
   }
+}
+
+function createCenterHintWindow() {
+  if (centerHintWindow && !centerHintWindow.isDestroyed()) return centerHintWindow;
+  const area = screen.getPrimaryDisplay().workArea;
+  const width = 420;
+  const height = 90;
+  const x = Math.round(area.x + (area.width - width) / 2);
+  const y = Math.round(area.y + (area.height - height) / 2);
+
+  centerHintWindow = new BrowserWindow({
+    width,
+    height,
+    x,
+    y,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    thickFrame: false,
+    webPreferences: {
+      preload: path.join(__dirname, "center-hint-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  centerHintWindow.setIgnoreMouseEvents(true);
+  centerHintWindow.setAlwaysOnTop(true, "screen-saver");
+  centerHintWindow.loadFile(path.join(__dirname, "center-hint.html"));
+  centerHintWindow.on("closed", () => {
+    centerHintWindow = null;
+    if (centerHintHideTimer) {
+      clearTimeout(centerHintHideTimer);
+      centerHintHideTimer = null;
+    }
+  });
+  return centerHintWindow;
+}
+
+function showCenterHint(message) {
+  const text = String(message || "").trim() || "请检查一下你的事件安排";
+  const win = createCenterHintWindow();
+  const send = () => {
+    try {
+      win.webContents.send("center-hint:show", text);
+    } catch {
+      // ignore
+    }
+  };
+  if (win.webContents.isLoading()) {
+    win.webContents.once("did-finish-load", send);
+  } else {
+    send();
+  }
+  win.showInactive();
+  if (centerHintHideTimer) {
+    clearTimeout(centerHintHideTimer);
+    centerHintHideTimer = null;
+  }
+  centerHintHideTimer = setTimeout(() => {
+    if (centerHintWindow && !centerHintWindow.isDestroyed()) {
+      centerHintWindow.hide();
+    }
+  }, 1400);
 }
 
 function applyBubbleWindowSize(size) {
@@ -960,6 +1038,9 @@ ipcMain.handle("settings:update", (_, patch) => {
   if (Object.prototype.hasOwnProperty.call(patch || {}, "bubbleBlinkSeconds")) {
     syncBubbleSettingsToRenderer(state.settings);
   }
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "bubbleCenterHintEnabled")) {
+    syncBubbleSettingsToRenderer(state.settings);
+  }
 
   return state.settings;
 });
@@ -977,6 +1058,11 @@ ipcMain.handle("window:restore-from-bubble", () => {
 
 ipcMain.handle("window:hide-bubble", () => {
   hideBubbleWindow();
+  return true;
+});
+
+ipcMain.handle("window:show-center-hint", (_, text) => {
+  showCenterHint(text);
   return true;
 });
 
@@ -1025,6 +1111,14 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   isQuitting = true;
   stopBubbleDrag();
+  if (centerHintHideTimer) {
+    clearTimeout(centerHintHideTimer);
+    centerHintHideTimer = null;
+  }
+  if (centerHintWindow && !centerHintWindow.isDestroyed()) {
+    centerHintWindow.destroy();
+    centerHintWindow = null;
+  }
   if (reminderTimer) {
     clearInterval(reminderTimer);
     reminderTimer = null;

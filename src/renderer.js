@@ -17,6 +17,7 @@
     alwaysOnTop: true,
     bubbleSize: 46,
     bubbleBlinkSeconds: 0,
+    bubbleCenterHintEnabled: true,
     reminders: {
       enabled: true,
       rules: {
@@ -76,6 +77,7 @@ const els = {
   bubbleSize: document.getElementById("bubbleSize"),
   bubbleSizeValue: document.getElementById("bubbleSizeValue"),
   bubbleBlinkSeconds: document.getElementById("bubbleBlinkSeconds"),
+  bubbleCenterHintEnabled: document.getElementById("bubbleCenterHintEnabled"),
   emptyTemplate: document.getElementById("emptyTemplate")
 };
 
@@ -925,6 +927,11 @@ function applyBubbleBlinkSettings(settings) {
   els.bubbleBlinkSeconds.value = String(seconds);
 }
 
+function applyBubbleCenterHintSettings(settings) {
+  if (!els.bubbleCenterHintEnabled) return;
+  els.bubbleCenterHintEnabled.checked = settings?.bubbleCenterHintEnabled !== false;
+}
+
 function showInAppReminder(payload) {
   const title = payload?.title || "提醒";
   const body = payload?.body || "";
@@ -1289,6 +1296,15 @@ if (els.bubbleBlinkSeconds) {
   });
 }
 
+if (els.bubbleCenterHintEnabled) {
+  els.bubbleCenterHintEnabled.addEventListener("change", async () => {
+    state.settings = await window.reminderApi.updateSettings({
+      bubbleCenterHintEnabled: Boolean(els.bubbleCenterHintEnabled.checked)
+    });
+    applyBubbleCenterHintSettings(state.settings);
+  });
+}
+
 async function boot() {
   const settings = await window.reminderApi.getSettings();
   state.settings = settings;
@@ -1297,6 +1313,7 @@ async function boot() {
   applyReminderSettings(settings);
   applyBubbleSizeSettings(settings);
   applyBubbleBlinkSettings(settings);
+  applyBubbleCenterHintSettings(settings);
   bindFilterEvents();
   bindReminderEvents();
   bindWorkspaceTabs();

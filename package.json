@@ -1,6 +1,6 @@
 {
   "name": "desktop-reminder",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Lightweight desktop reminder app",
   "main": "src/main.js",
   "scripts": {
